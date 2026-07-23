@@ -130,6 +130,8 @@ class SentimentResultRead(BaseModel):
     confidence: float
     model_used: str
 
+    model_config = {"protected_namespaces": ()}
+
 
 class SentimentBatchResponse(BaseModel):
     results: List[SentimentResultRead]
@@ -178,6 +180,8 @@ class ForecastRead(BaseModel):
     confidence_intervals: Optional[Dict[str, Any]]
     model_version: str
     created_at: datetime
+
+    model_config = {"protected_namespaces": ()}
 
     model_config = {"from_attributes": True}
 

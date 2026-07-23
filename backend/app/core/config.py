@@ -38,18 +38,20 @@ class Settings(BaseSettings):
     SYNC_DATABASE_URL: str = "postgresql://nexmarket:nexmarket@localhost:5432/nexmarket_db"
 
     # ── LLM ───────────────────────────────────────────────────────
-    LLM_PROVIDER: Literal["openai", "gemini"] = "openai"
+    LLM_PROVIDER: Literal["openai", "gemini", "local"] = "openai"
     LLM_MODEL: str = "gpt-4o"
     OPENAI_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
+    LOCAL_LLM_BASE_URL: str = "http://localhost:11434/v1"
 
     # ── Image Generation ──────────────────────────────────────────
-    IMAGE_PROVIDER: Literal["openai", "stability", "mock"] = "mock"
+    IMAGE_PROVIDER: Literal["openai", "stability", "mock", "local"] = "mock"
     STABILITY_API_KEY: str = ""
 
     # ── Vision LLM ────────────────────────────────────────────────
-    VISION_PROVIDER: Literal["openai", "gemini"] = "openai"
+    VISION_PROVIDER: Literal["openai", "gemini", "local"] = "openai"
     VISION_MODEL: str = "gpt-4o"
+    LOCAL_VISION_BASE_URL: str = "http://localhost:11434/v1"
 
     # ── Social Media ──────────────────────────────────────────────
     SOCIAL_MODE: Literal["live", "mock"] = "mock"

@@ -1,0 +1,39 @@
+# ─── IDE & Editor ────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# ─── Environment & Secrets ───────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# ─── OS-specific ─────────────────────────────────────────────────────────────
+Thumbs.db
+.DS_Store
+*.exe
+*.dll
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+*.log
+logs/
+*.pot
+
+# ─── Database ────────────────────────────────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ─── Root-level build artifacts ──────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.pyc

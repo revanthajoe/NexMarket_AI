@@ -7,9 +7,9 @@
 ## What It Does
 
 Submit a product → NexMarket AI automatically:
-1. **Generates a marketing poster** (DALL·E 3 / Stability AI / Mock SVG)
-2. **Generates channel-specific ad copy** (GPT-4o / Gemini / Demo templates)
-3. **Evaluates the poster** using Vision LLM (score out of 100, strengths, suggestions)
+1. **Generates a marketing poster** (Stable Diffusion XL local / DALL·E 3 / Mock SVG)
+2. **Generates channel-specific ad copy** (Qwen 2.5 Instruct local / GPT-4o / Demo templates)
+3. **Evaluates the poster** using Vision LLM (Qwen2.5-VL local / GPT-4o)
 4. **Predicts engagement** using LSTM forecasting (7–30 day horizon)
 5. **Scores leads** using XGBoost (hot/warm/cold with feature importance)
 6. **Optimizes campaign strategy** via Thompson Sampling contextual bandit
@@ -35,7 +35,7 @@ Submit a product → NexMarket AI automatically:
 │                                                                  │
 │  ┌──────────────┐  ┌───────────────┐  ┌──────────────────────┐ │
 │  │ Poster Gen   │  │ Ad Copy Gen   │  │ Poster Evaluator     │ │
-│  │ DALL·E/Mock  │  │ GPT-4o/Demo   │  │ Vision LLM (GPT-4o)  │ │
+│  │ SDXL/Mock    │  │ Qwen2.5/GPT-4o│  │ Qwen2.5-VL / GPT-4o  │ │
 │  └──────────────┘  └───────────────┘  └──────────────────────┘ │
 │  ┌──────────────┐  ┌───────────────┐  ┌──────────────────────┐ │
 │  │ Sentiment    │  │ Lead Scoring  │  │ LSTM Forecasting     │ │
@@ -67,9 +67,9 @@ Submit a product → NexMarket AI automatically:
 | Backend     | FastAPI, Python 3.11, SQLAlchemy (async)          |
 | Database    | PostgreSQL 16                                     |
 | Workflow    | n8n                                               |
-| LLM         | OpenAI GPT-4o / Google Gemini 1.5 Flash           |
-| Image Gen   | DALL·E 3 / Stability AI SDXL / SVG Mock           |
-| Vision      | GPT-4o Vision / Gemini Vision                     |
+| LLM         | Qwen 2.5 Instruct (local) / OpenAI GPT-4o         |
+| Image Gen   | Stable Diffusion XL (local) / DALL·E 3            |
+| Vision      | Qwen2.5-VL (local) / GPT-4o Vision                |
 | Sentiment   | DistilBERT (HuggingFace Transformers)             |
 | Lead ML     | XGBoost (trained on synthetic data)               |
 | Forecasting | LSTM (TensorFlow/Keras — NO GRU)                  |
@@ -259,8 +259,8 @@ With these settings:
 |-----------------------|------------|----------------------------------------|
 | OPENAI_API_KEY        | (empty)    | OpenAI key for GPT-4o + DALL·E         |
 | GEMINI_API_KEY        | (empty)    | Google Gemini key                      |
-| LLM_PROVIDER          | openai     | openai or gemini                       |
-| IMAGE_PROVIDER        | mock       | openai / stability / mock              |
+| LLM_PROVIDER          | local      | openai, gemini, or local               |
+| IMAGE_PROVIDER        | local      | openai, stability, mock, or local      |
 | SOCIAL_MODE           | mock       | live or mock                           |
 | META_ACCESS_TOKEN     | (empty)    | Meta Graph API token                   |
 | LINKEDIN_ACCESS_TOKEN | (empty)    | LinkedIn API token                     |
@@ -298,9 +298,9 @@ poster generation (mock), campaign optimization.
 
 | Module | Implementation                    | Fallback                    |
 |--------|-----------------------------------|-----------------------------|
-| Poster Generator | DALL·E 3 / Stability AI   | SVG mock                    |
-| Ad Generator     | GPT-4o / Gemini            | Template strings            |
-| Poster Evaluator | GPT-4o Vision              | Mock scores                 |
+| Poster Generator | Stable Diffusion XL local | SVG mock                    |
+| Ad Generator     | Qwen 2.5 Instruct (local) | Template strings            |
+| Poster Evaluator | Qwen2.5-VL (local)         | Mock scores                 |
 | Sentiment        | DistilBERT                 | Keyword rules               |
 | Lead Prediction  | XGBoost (synthetic train)  | Heuristic formula           |
 | Forecasting      | LSTM (Keras, synthetic)    | Linear trend extrapolation  |

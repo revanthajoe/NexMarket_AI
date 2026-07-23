@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
 from app.models.models import AnalyticsEvent, Campaign, OptimizationResult
 from app.schemas.schemas import OptimizationRead, OptimizationRequest
-from app.services.optimization.optimizer import optimization_service
+from app.services.optimization.optimizer import campaign_optimizer
 
 router = APIRouter(prefix="/optimize", tags=["Optimization"])
 
@@ -41,7 +41,7 @@ async def optimize_campaign(
         for p, v in platform_history.items()
     }
 
-    opt = await optimization_service.optimize(
+    opt = await campaign_optimizer.optimize(
         campaign_goal=campaign.campaign_goal,
         target_audience=campaign.target_audience,
         platform_history=platform_avg,

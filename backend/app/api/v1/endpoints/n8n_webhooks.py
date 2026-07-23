@@ -17,7 +17,7 @@ from app.services.ai.ad_generator import ad_copy_generator
 from app.services.ai.lstm_forecast import lstm_forecast_service
 from app.services.ai.poster_evaluator import poster_evaluator
 from app.services.ai.poster_generator import poster_generator
-from app.services.optimization.optimizer import optimization_service
+from app.services.optimization.optimizer import campaign_optimizer
 from app.services.posting.posting_service import social_posting_service
 
 router = APIRouter(prefix="/n8n", tags=["n8n Webhooks"])
@@ -80,8 +80,10 @@ async def n8n_trigger_campaign(
                 await bg_db.flush()
 
             if "optimize" in steps:
-                opt = await optimization_service.optimize(
-                    c.campaign_goal, c.target_audience, {}, c.budget
+                opt = await campaign_optimizer.optimize(
+                    campaign_goal=c.campaign_goal, 
+                    target_audience=c.target_audience, 
+                    budget=c.budget
                 )
                 results["optimization"] = opt
 

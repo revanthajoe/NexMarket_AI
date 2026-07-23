@@ -1,126 +1,58 @@
 """
-Module 4: Sentiment Analysis Service
-Uses DistilBERT (HuggingFace transformers) for fast, reliable sentiment.
-Falls back to rule-based VADER-style scoring if model not available.
+app/services/ai/sentiment.py
+──────────────────────────────
+Adapter: routes sentiment requests to InferenceManager → DistilBERTService.
 """
 from __future__ import annotations
 
-import re
-from typing import Optional
+import logging
+from typing import List
 
-from app.core.config import settings
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-_pipeline = None
 
+class SentimentService:
 
-def _load_pipeline():
-    global _pipeline
-    if _pipeline is None:
+    async def analyze(self, texts: List[str], campaign_id: str = None) -> dict:
+        logger.info("sentiment_analyze n=%d", len(texts))
+
         try:
-            from transformers import pipeline
-
-            _pipeline = pipeline(
-                "sentiment-analysis",
-                model=settings.SENTIMENT_MODEL,
-                truncation=True,
-                max_length=512,
-            )
-            logger.info("sentiment_model_loaded", model=settings.SENTIMENT_MODEL)
+            from ai.inference_manager import inference_manager
+            results = await inference_manager.analyze_sentiment(texts)
         except Exception as exc:
-            logger.warning("sentiment_model_load_failed", error=str(exc))
-            _pipeline = None
-    return _pipeline
+            logger.warning("sentiment_fallback error=%s", exc)
+            results = [_keyword_fallback(t) for t in texts]
+
+        summary = _summarize(results)
+        return {"results": results, "summary": summary}
 
 
-# ── Simple keyword-based fallback ────────────────────────────────────────────
-
-_POSITIVE_WORDS = {
-    "great", "amazing", "love", "excellent", "fantastic", "wonderful", "good",
-    "best", "perfect", "happy", "awesome", "superb", "brilliant", "outstanding",
-}
-_NEGATIVE_WORDS = {
-    "bad", "terrible", "awful", "worst", "hate", "horrible", "poor", "disappointing",
-    "useless", "waste", "broken", "fail", "wrong", "slow", "ugly",
-}
-
-
-def _rule_based_sentiment(text: str) -> dict:
-    words = set(re.sub(r"[^a-z\s]", "", text.lower()).split())
-    pos = len(words & _POSITIVE_WORDS)
-    neg = len(words & _NEGATIVE_WORDS)
-    total = max(pos + neg, 1)
-    pos_score = round(pos / total, 3)
-    neg_score = round(neg / total, 3)
-    neutral_score = round(max(0, 1 - pos_score - neg_score), 3)
-
+def _keyword_fallback(text: str) -> dict:
+    pos_kw = {"great", "amazing", "love", "excellent", "fantastic", "good", "best"}
+    neg_kw = {"terrible", "awful", "hate", "worst", "bad", "horrible", "poor"}
+    words  = set(text.lower().split())
+    pos, neg = len(words & pos_kw), len(words & neg_kw)
     if pos > neg:
-        label, confidence = "positive", pos_score
+        label, ps, ns = "positive", 0.85, 0.10
     elif neg > pos:
-        label, confidence = "negative", neg_score
+        label, ps, ns = "negative", 0.10, 0.85
     else:
-        label, confidence = "neutral", neutral_score
-
+        label, ps, ns = "neutral", 0.33, 0.33
     return {
-        "label": label,
-        "positive_score": pos_score,
-        "negative_score": neg_score,
-        "neutral_score": neutral_score,
-        "confidence": confidence,
-        "model_used": "rule-based-fallback",
+        "text": text, "label": label,
+        "positive_score": ps, "negative_score": ns,
+        "neutral_score": round(1 - ps - ns, 2),
+        "confidence": max(ps, ns), "model_used": "keyword-fallback",
     }
 
 
-class SentimentService:
-    async def analyze(self, text: str, campaign_id: Optional[str] = None) -> dict:
-        pipe = _load_pipeline()
-        if pipe is None:
-            return _rule_based_sentiment(text)
-
-        try:
-            result = pipe(text)[0]
-            # DistilBERT returns POSITIVE/NEGATIVE
-            raw_label = result["label"].lower()
-            score = round(float(result["score"]), 4)
-
-            if raw_label == "positive":
-                return {
-                    "label": "positive",
-                    "positive_score": score,
-                    "negative_score": round(1 - score, 4),
-                    "neutral_score": 0.0,
-                    "confidence": score,
-                    "model_used": settings.SENTIMENT_MODEL,
-                }
-            else:
-                return {
-                    "label": "negative",
-                    "positive_score": round(1 - score, 4),
-                    "negative_score": score,
-                    "neutral_score": 0.0,
-                    "confidence": score,
-                    "model_used": settings.SENTIMENT_MODEL,
-                }
-        except Exception as exc:
-            logger.warning("sentiment_inference_failed", error=str(exc))
-            return _rule_based_sentiment(text)
-
-    async def analyze_batch(self, texts: list[str], campaign_id: Optional[str] = None) -> list[dict]:
-        results = []
-        for text in texts:
-            r = await self.analyze(text, campaign_id)
-            r["text"] = text
-            results.append(r)
-        return results
-
-    def summarize(self, results: list[dict]) -> dict[str, int]:
-        summary = {"positive": 0, "negative": 0, "neutral": 0}
-        for r in results:
-            label = r.get("label", "neutral")
-            summary[label] = summary.get(label, 0) + 1
-        return summary
+def _summarize(results: list) -> dict:
+    counts = {"positive": 0, "negative": 0, "neutral": 0}
+    for r in results:
+        counts[r.get("label", "neutral")] += 1
+    return counts
 
 
 sentiment_service = SentimentService()
