@@ -1,0 +1,30 @@
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+sqlalchemy>=2.0.30
+asyncpg>=0.29.0
+alembic>=1.13.0
+psycopg2-binary>=2.9.9
+httpx>=0.27.0
+structlog>=24.2.0
+
+# AI / ML
+openai>=1.35.0
+google-generativeai>=0.7.0
+transformers>=4.41.0
+torch>=2.3.0
+xgboost>=2.0.3
+tensorflow>=2.16.0
+numpy>=1.26.0
+scikit-learn>=1.5.0
+Pillow>=10.3.0
+
+# Social posting
+tweepy>=4.14.0
+
+# Dev / Test
+pytest>=8.2.0
+pytest-asyncio>=0.23.0
+httpx>=0.27.0
+python-dotenv>=1.0.0

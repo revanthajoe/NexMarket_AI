@@ -1,0 +1,137 @@
+{
+  "name": "NexMarket — Full Campaign Pipeline",
+  "nodes": [
+    {
+      "id": "1",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [100, 300],
+      "parameters": {
+        "path": "nexmarket-campaign",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "2",
+      "name": "Validate Payload",
+      "type": "n8n-nodes-base.if",
+      "position": [300, 300],
+      "parameters": {
+        "conditions": {
+          "string": [
+            { "value1": "={{ $json.campaign_id }}", "operation": "isNotEmpty" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "3",
+      "name": "Trigger Backend Pipeline",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [500, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/api/v1/n8n/trigger/campaign",
+        "bodyType": "json",
+        "body": "={{ JSON.stringify({ campaign_id: $json.campaign_id, steps: ['poster','adcopy','evaluate','forecast','optimize','post'] }) }}",
+        "options": { "response": { "response": { "neverError": true } } }
+      }
+    },
+    {
+      "id": "4",
+      "name": "Wait 5s",
+      "type": "n8n-nodes-base.wait",
+      "position": [700, 300],
+      "parameters": { "amount": 5, "unit": "seconds" }
+    },
+    {
+      "id": "5",
+      "name": "Poll Pipeline Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "=http://localhost:8000/api/v1/n8n/status/{{ $('Webhook Trigger').item.json.campaign_id }}"
+      }
+    },
+    {
+      "id": "6",
+      "name": "Check If Complete",
+      "type": "n8n-nodes-base.if",
+      "position": [1100, 300],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.status }}",
+              "operation": "equal",
+              "value2": "posted"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "7",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [1300, 200],
+      "parameters": {
+        "responseCode": 200,
+        "responseBody": "={{ JSON.stringify({ status: 'pipeline_complete', campaign_id: $json.campaign_id }) }}"
+      }
+    },
+    {
+      "id": "8",
+      "name": "Respond Processing",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [1300, 400],
+      "parameters": {
+        "responseCode": 202,
+        "responseBody": "={{ JSON.stringify({ status: 'processing', campaign_id: $json.campaign_id }) }}"
+      }
+    },
+    {
+      "id": "9",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [500, 500],
+      "parameters": {
+        "responseCode": 400,
+        "responseBody": "{\"error\": \"Invalid payload — campaign_id required\"}"
+      }
+    },
+    {
+      "id": "10",
+      "name": "Schedule Analytics Ingest",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [100, 600],
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "intervalValue": 6 }] }
+      }
+    },
+    {
+      "id": "11",
+      "name": "Ingest Demo Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [300, 600],
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:8000/api/v1/n8n/analytics/ingest",
+        "bodyType": "json",
+        "body": "={{ JSON.stringify({ campaign_id: 'demo', platform: 'instagram', likes: Math.floor(Math.random()*500), clicks: Math.floor(Math.random()*100), impressions: Math.floor(Math.random()*5000), ctr: Math.random()*0.08 }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger":         { "main": [[{ "node": "Validate Payload",       "type": "main", "index": 0 }]] },
+    "Validate Payload":        { "main": [[{ "node": "Trigger Backend Pipeline","type": "main", "index": 0 }], [{ "node": "Error Handler","type": "main", "index": 0 }]] },
+    "Trigger Backend Pipeline":{ "main": [[{ "node": "Wait 5s",               "type": "main", "index": 0 }]] },
+    "Wait 5s":                 { "main": [[{ "node": "Poll Pipeline Status",  "type": "main", "index": 0 }]] },
+    "Poll Pipeline Status":    { "main": [[{ "node": "Check If Complete",     "type": "main", "index": 0 }]] },
+    "Check If Complete":       { "main": [[{ "node": "Respond Success",       "type": "main", "index": 0 }], [{ "node": "Respond Processing","type": "main", "index": 0 }]] },
+    "Schedule Analytics Ingest":{ "main": [[{ "node": "Ingest Demo Analytics","type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
