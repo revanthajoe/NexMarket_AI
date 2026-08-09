@@ -16,7 +16,7 @@ router = APIRouter(prefix="/leads", tags=["Lead Scoring"])
 async def predict_lead(
     payload: LeadScoreRequest, db: AsyncSession = Depends(get_db)
 ):
-    result = lead_prediction_service.predict(payload.model_dump())
+    result = await lead_prediction_service.predict(**payload.model_dump())
 
     record = LeadScore(
         campaign_id=payload.campaign_id,

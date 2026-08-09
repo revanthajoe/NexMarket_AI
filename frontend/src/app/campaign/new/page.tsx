@@ -32,12 +32,43 @@ export default function NewCampaignPage() {
 
   const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
 
+  const validateForm = () => {
+    const errors: string[] = [];
+
+    if (form.name.trim().length < 2) errors.push("Campaign name must be at least 2 characters");
+    if (form.product_name.trim().length < 2) errors.push("Product / service name must be at least 2 characters");
+    if (form.description.trim().length < 10) errors.push("Description must be at least 10 characters");
+    if (form.offer.trim().length < 5) errors.push("Offer / promotion must be at least 5 characters");
+    if (form.target_audience.trim().length < 5) errors.push("Target audience must be at least 5 characters");
+    if (!PLATFORMS.includes(form.preferred_platform)) errors.push("Select a valid platform");
+    if (!GOALS.includes(form.campaign_goal)) errors.push("Select a valid campaign goal");
+    if (form.budget !== undefined && form.budget < 0) errors.push("Budget cannot be negative");
+
+    return errors;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const errors = validateForm();
+    if (errors.length > 0) {
+      toast.error(errors[0]);
+      return;
+    }
+
     setLoading(true);
     try {
       const { post_now, ...payload } = form;
-      const campaign = await api.campaigns.create(payload);
+      const normalizedPayload = {
+        ...payload,
+        name: payload.name.trim(),
+        product_name: payload.product_name.trim(),
+        description: payload.description.trim(),
+        offer: payload.offer.trim(),
+        target_audience: payload.target_audience.trim(),
+        brand_style: payload.brand_style?.trim() || undefined,
+      };
+      const campaign = await api.campaigns.create(normalizedPayload);
       toast.success(`Campaign "${campaign.name}" created!`);
 
       if (autoRun) {

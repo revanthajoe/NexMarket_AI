@@ -16,12 +16,12 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    JSON,
     Integer,
     String,
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -83,7 +83,7 @@ class Poster(Base):
     prompt_used: Mapped[Optional[str]] = mapped_column(Text)
     provider: Mapped[str] = mapped_column(String(50), default="mock")
     variation_index: Mapped[int] = mapped_column(Integer, default=0)
-    metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSONB)
+    metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     campaign: Mapped["Campaign"] = relationship(back_populates="posters")
@@ -109,10 +109,10 @@ class PosterEvaluation(Base):
     contrast_score: Mapped[float] = mapped_column(Float, default=0.0)
     cta_score: Mapped[float] = mapped_column(Float, default=0.0)
     visual_appeal_score: Mapped[float] = mapped_column(Float, default=0.0)
-    strengths: Mapped[Optional[list]] = mapped_column(JSONB)
-    weaknesses: Mapped[Optional[list]] = mapped_column(JSONB)
-    suggestions: Mapped[Optional[list]] = mapped_column(JSONB)
-    raw_response: Mapped[Optional[dict]] = mapped_column(JSONB)
+    strengths: Mapped[Optional[list]] = mapped_column(JSON)
+    weaknesses: Mapped[Optional[list]] = mapped_column(JSON)
+    suggestions: Mapped[Optional[list]] = mapped_column(JSON)
+    raw_response: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     poster: Mapped["Poster"] = relationship(back_populates="evaluations")
@@ -132,8 +132,8 @@ class AdCopy(Base):
     # instagram | facebook | linkedin | email | twitter
     headline: Mapped[Optional[str]] = mapped_column(String(500))
     body: Mapped[str] = mapped_column(Text, nullable=False)
-    cta_variants: Mapped[Optional[list]] = mapped_column(JSONB)
-    hashtags: Mapped[Optional[list]] = mapped_column(JSONB)
+    cta_variants: Mapped[Optional[list]] = mapped_column(JSON)
+    hashtags: Mapped[Optional[list]] = mapped_column(JSON)
     tone: Mapped[Optional[str]] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -170,7 +170,7 @@ class SocialPost(Base):
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
     error_message: Mapped[Optional[str]] = mapped_column(Text)
-    response_payload: Mapped[Optional[dict]] = mapped_column(JSONB)
+    response_payload: Mapped[Optional[dict]] = mapped_column(JSON)
     is_mock: Mapped[bool] = mapped_column(Boolean, default=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -192,7 +192,7 @@ class PostLog(Base):
         ForeignKey("social_posts.id", ondelete="CASCADE")
     )
     event: Mapped[str] = mapped_column(String(100), nullable=False)
-    detail: Mapped[Optional[dict]] = mapped_column(JSONB)
+    detail: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     post: Mapped["SocialPost"] = relationship(back_populates="logs")
@@ -257,8 +257,8 @@ class LeadScore(Base):
     score: Mapped[float] = mapped_column(Float, nullable=False)  # 0-100
     purchase_probability: Mapped[float] = mapped_column(Float, nullable=False)  # 0-1
     category: Mapped[str] = mapped_column(String(20))  # hot | warm | cold
-    feature_importance: Mapped[Optional[dict]] = mapped_column(JSONB)
-    input_features: Mapped[Optional[dict]] = mapped_column(JSONB)
+    feature_importance: Mapped[Optional[dict]] = mapped_column(JSON)
+    input_features: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     campaign: Mapped["Campaign"] = relationship(back_populates="lead_scores")
@@ -275,12 +275,12 @@ class EngagementForecast(Base):
         ForeignKey("campaigns.id", ondelete="CASCADE")
     )
     forecast_horizon_days: Mapped[int] = mapped_column(Integer, default=7)
-    predicted_likes: Mapped[Optional[list]] = mapped_column(JSONB)
-    predicted_shares: Mapped[Optional[list]] = mapped_column(JSONB)
-    predicted_comments: Mapped[Optional[list]] = mapped_column(JSONB)
-    predicted_ctr: Mapped[Optional[list]] = mapped_column(JSONB)
-    predicted_reach: Mapped[Optional[list]] = mapped_column(JSONB)
-    confidence_intervals: Mapped[Optional[dict]] = mapped_column(JSONB)
+    predicted_likes: Mapped[Optional[list]] = mapped_column(JSON)
+    predicted_shares: Mapped[Optional[list]] = mapped_column(JSON)
+    predicted_comments: Mapped[Optional[list]] = mapped_column(JSON)
+    predicted_ctr: Mapped[Optional[list]] = mapped_column(JSON)
+    predicted_reach: Mapped[Optional[list]] = mapped_column(JSON)
+    confidence_intervals: Mapped[Optional[dict]] = mapped_column(JSON)
     model_version: Mapped[str] = mapped_column(String(50), default="v1")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -302,7 +302,7 @@ class OptimizationResult(Base):
     recommended_budget: Mapped[Optional[float]] = mapped_column(Float)
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     reasoning: Mapped[Optional[str]] = mapped_column(Text)
-    platform_scores: Mapped[Optional[dict]] = mapped_column(JSONB)
+    platform_scores: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     campaign: Mapped["Campaign"] = relationship(back_populates="optimizations")

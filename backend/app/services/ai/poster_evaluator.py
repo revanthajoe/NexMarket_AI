@@ -38,6 +38,9 @@ class PosterEvaluatorService:
     async def evaluate(self, image_url: str) -> dict:
         logger.info("poster_evaluate url=%s provider=%s", image_url, settings.VISION_PROVIDER)
 
+        if settings.VISION_PROVIDER == "mock":
+            return self.normalize(_MOCK_EVALUATION)
+
         try:
             from ai.inference_manager import inference_manager
             raw = await inference_manager.evaluate_poster(

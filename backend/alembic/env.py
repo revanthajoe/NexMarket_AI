@@ -11,7 +11,7 @@ from app.db.session import Base
 import app.models.models  # ensure models are registered
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.SYNC_DATABASE_URL)
+config.set_main_option("sqlalchemy.url", settings.effective_sync_database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

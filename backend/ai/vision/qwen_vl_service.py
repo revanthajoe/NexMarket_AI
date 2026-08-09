@@ -58,7 +58,9 @@ class QwenVLService(BaseModelService):
         from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
 
         bnb_config = get_bnb_4bit_config() if _SPEC.use_4bit else None
-        attn_impl  = "flash_attention_2" if (_SPEC.flash_attn and device_manager.info.has_cuda) else "eager"
+        
+        # Use PyTorch's native SDPA instead of flash_attention_2 which requires custom compilation
+        attn_impl  = "sdpa" if (_SPEC.flash_attn and device_manager.info.has_cuda) else "eager"
 
         logger.info("qwen_vl loading model_id=%s 4bit=%s attn=%s",
                     _SPEC.model_id, bnb_config is not None, attn_impl)

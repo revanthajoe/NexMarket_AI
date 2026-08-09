@@ -3,32 +3,39 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import toast from "react-hot-toast";
+import dynamic from "next/dynamic";
 import {
   Loader2, Image as ImageIcon, Send, TrendingUp,
-  Target, Zap, RefreshCw, CheckCircle2, XCircle, Clock,
+  Target, Zap, RefreshCw, CheckCircle2,
 } from "lucide-react";
-import {
-  RadarChart, Radar, PolarGrid, PolarAngleAxis, ResponsiveContainer,
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-} from "recharts";
 import {
   api, Campaign, Poster, PosterEvaluation, AdCopy,
   SocialPost, Forecast, Optimization,
 } from "@/lib/api";
 
+// Dynamic imports for heavy chart components — split from main bundle
+const PosterRadarChart = dynamic(
+  () => import("@/components/charts/PosterRadarChart").then((m) => m.PosterRadarChart),
+  { ssr: false, loading: () => <div className="h-[220px] shimmer rounded-xl" /> }
+);
+const ForecastLineChart = dynamic(
+  () => import("@/components/charts/ForecastLineChart").then((m) => m.ForecastLineChart),
+  { ssr: false, loading: () => <div className="h-[280px] shimmer rounded-xl" /> }
+);
+
 type TabId = "overview" | "poster" | "adcopy" | "posting" | "forecast" | "optimize";
 
 export default function CampaignDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const [campaign, setCampaign] = useState<Campaign | null>(null);
-  const [posters, setPosters] = useState<Poster[]>([]);
-  const [eval_, setEval] = useState<PosterEvaluation | null>(null);
-  const [copies, setCopies] = useState<AdCopy[]>([]);
-  const [posts, setPosts] = useState<SocialPost[]>([]);
-  const [forecast, setForecast] = useState<Forecast | null>(null);
+  const [campaign, setCampaign]       = useState<Campaign | null>(null);
+  const [posters, setPosters]         = useState<Poster[]>([]);
+  const [eval_, setEval]              = useState<PosterEvaluation | null>(null);
+  const [copies, setCopies]           = useState<AdCopy[]>([]);
+  const [posts, setPosts]             = useState<SocialPost[]>([]);
+  const [forecast, setForecast]       = useState<Forecast | null>(null);
   const [optimization, setOptimization] = useState<Optimization | null>(null);
-  const [tab, setTab] = useState<TabId>("overview");
-  const [loading, setLoading] = useState(true);
+  const [tab, setTab]                 = useState<TabId>("overview");
+  const [loading, setLoading]         = useState(true);
   const [actionLoading, setActionLoading] = useState("");
 
   const load = async () => {
@@ -55,7 +62,7 @@ export default function CampaignDetailPage() {
       await fn();
       await load();
       toast.success(`${action} complete!`);
-    } catch (e: unknown) {
+    } catch {
       toast.error(`${action} failed`);
     } finally {
       setActionLoading("");
@@ -82,12 +89,12 @@ export default function CampaignDetailPage() {
   };
 
   const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
-    { id: "overview", label: "Overview",   icon: Zap },
-    { id: "poster",   label: "Poster",     icon: ImageIcon },
-    { id: "adcopy",   label: "Ad Copy",    icon: Send },
-    { id: "posting",  label: "Posting",    icon: Send },
-    { id: "forecast", label: "Forecast",   icon: TrendingUp },
-    { id: "optimize", label: "Optimize",   icon: Target },
+    { id: "overview",  label: "Overview",  icon: Zap },
+    { id: "poster",    label: "Poster",    icon: ImageIcon },
+    { id: "adcopy",    label: "Ad Copy",   icon: Send },
+    { id: "posting",   label: "Posting",   icon: Send },
+    { id: "forecast",  label: "Forecast",  icon: TrendingUp },
+    { id: "optimize",  label: "Optimize",  icon: Target },
   ];
 
   return (
@@ -198,13 +205,13 @@ function OverviewTab({ campaign, copies, posts }: {
       <div className="glass rounded-xl p-5 border border-surface-border space-y-3">
         <h3 className="text-sm font-semibold text-brand-400 uppercase tracking-wide">Campaign Details</h3>
         {[
-          ["Product", campaign.product_name],
+          ["Product",     campaign.product_name],
           ["Description", campaign.description],
-          ["Offer", campaign.offer],
-          ["Target", campaign.target_audience],
-          ["Goal", campaign.campaign_goal],
-          ["Platform", campaign.preferred_platform],
-          ["Budget", campaign.budget ? `$${campaign.budget}` : "Not set"],
+          ["Offer",       campaign.offer],
+          ["Target",      campaign.target_audience],
+          ["Goal",        campaign.campaign_goal],
+          ["Platform",    campaign.preferred_platform],
+          ["Budget",      campaign.budget ? `$${campaign.budget}` : "Not set"],
         ].map(([k, v]) => (
           <div key={k} className="flex gap-3">
             <span className="text-xs text-slate-500 w-24 flex-shrink-0">{k}</span>
@@ -239,15 +246,6 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
   posters: Poster[]; eval_: PosterEvaluation | null; campaignId: string;
   onGenerate: () => void; loading: boolean;
 }) {
-  const radarData = eval_ ? [
-    { dim: "Readability", score: eval_.readability_score },
-    { dim: "Layout",      score: eval_.layout_score },
-    { dim: "Branding",    score: eval_.branding_score },
-    { dim: "Contrast",    score: eval_.contrast_score },
-    { dim: "CTA",         score: eval_.cta_score },
-    { dim: "Visual",      score: eval_.visual_appeal_score },
-  ] : [];
-
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
@@ -261,11 +259,9 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
         {posters.slice(0, 2).map((p) => (
           <div key={p.id} className="glass rounded-xl overflow-hidden border border-surface-border">
             <div className="aspect-square bg-surface-muted flex items-center justify-center">
-              {p.image_url.endsWith(".svg") ? (
-                <img src={p.image_url} alt="Poster" className="w-full h-full object-contain" />
-              ) : (
-                <img src={p.image_url} alt="Poster" className="w-full h-full object-cover" />
-              )}
+              {/* Using <img> here is intentional — poster URLs are dynamic from the backend */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={p.image_url} alt="Poster" className="w-full h-full object-contain" />
             </div>
             <div className="p-3 text-xs text-slate-500">
               Variation {p.variation_index + 1} · {p.provider}
@@ -279,13 +275,7 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
             Vision AI Score: <span className="text-white text-xl">{eval_.overall_score}/100</span>
           </h3>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <ResponsiveContainer width="100%" height={220}>
-              <RadarChart data={radarData}>
-                <PolarGrid stroke="#2d2b4e" />
-                <PolarAngleAxis dataKey="dim" tick={{ fill: "#94a3b8", fontSize: 11 }} />
-                <Radar dataKey="score" stroke="#6366f1" fill="#6366f1" fillOpacity={0.3} />
-              </RadarChart>
-            </ResponsiveContainer>
+            <PosterRadarChart eval_={eval_} />
             <div className="space-y-3">
               {eval_.strengths?.map((s, i) => (
                 <div key={i} className="flex gap-2 text-xs">
@@ -398,7 +388,6 @@ function PostingTab({ posts, campaignId, copies, posters, onPost, loading }: {
           Post Now
         </button>
       </div>
-
       <div className="space-y-3">
         <h3 className="text-sm font-semibold text-slate-400">Post History</h3>
         {posts.length === 0 ? (
@@ -434,19 +423,10 @@ function PostingTab({ posts, campaignId, copies, posters, onPost, loading }: {
 }
 
 function ForecastTab({ forecast, campaignId, onForecast, loading, runAction }: {
-  forecast: Forecast | null; campaignId: string; onForecast: () => void;
+  forecast: Forecast | null; campaignId: string;
+  onForecast: () => Promise<void>;
   loading: boolean; runAction: (a: string, fn: () => Promise<unknown>) => void;
 }) {
-  const chartData = forecast
-    ? forecast.predicted_likes.map((v, i) => ({
-        day: `Day ${i + 1}`,
-        likes:    Math.round(v),
-        shares:   Math.round(forecast.predicted_shares[i] || 0),
-        comments: Math.round(forecast.predicted_comments[i] || 0),
-        reach:    Math.round(forecast.predicted_reach[i] || 0),
-      }))
-    : [];
-
   return (
     <div className="space-y-6">
       <div className="flex justify-end">
@@ -458,24 +438,12 @@ function ForecastTab({ forecast, campaignId, onForecast, loading, runAction }: {
       </div>
       {!forecast ? (
         <div className="glass rounded-xl p-10 border border-surface-border text-center text-slate-500 text-sm">
-          Click "Run LSTM Forecast" to generate engagement predictions. Demo data will be seeded automatically.
+          Click &quot;Run LSTM Forecast&quot; to generate engagement predictions. Demo data will be seeded automatically.
         </div>
       ) : (
         <div className="glass rounded-xl p-6 border border-surface-border">
           <h3 className="text-sm font-semibold text-brand-400 mb-4">LSTM Engagement Forecast — Next 7 Days</h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2d2b4e" />
-              <XAxis dataKey="day" tick={{ fill: "#64748b", fontSize: 11 }} />
-              <YAxis tick={{ fill: "#64748b", fontSize: 11 }} />
-              <Tooltip contentStyle={{ background: "#17162a", border: "1px solid #2d2b4e", borderRadius: 8 }} />
-              <Legend />
-              <Line type="monotone" dataKey="likes"    stroke="#6366f1" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="shares"   stroke="#06b6d4" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="comments" stroke="#8b5cf6" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="reach"    stroke="#f59e0b" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+          <ForecastLineChart forecast={forecast} />
           <p className="text-xs text-slate-500 mt-3">Model: LSTM · Version: {forecast.model_version}</p>
         </div>
       )}
@@ -484,7 +452,8 @@ function ForecastTab({ forecast, campaignId, onForecast, loading, runAction }: {
 }
 
 function OptimizeTab({ optimization, campaignId, onOptimize, loading, runAction }: {
-  optimization: Optimization | null; campaignId: string; onOptimize: () => void;
+  optimization: Optimization | null; campaignId: string;
+  onOptimize: () => Promise<void>;
   loading: boolean; runAction: (a: string, fn: () => Promise<unknown>) => void;
 }) {
   const scores = optimization?.platform_scores
@@ -502,17 +471,17 @@ function OptimizeTab({ optimization, campaignId, onOptimize, loading, runAction 
       </div>
       {!optimization ? (
         <div className="glass rounded-xl p-10 border border-surface-border text-center text-slate-500 text-sm">
-          Click "Run Campaign Optimizer" to get Thompson Sampling recommendations.
+          Click &quot;Run Campaign Optimizer&quot; to get Thompson Sampling recommendations.
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="glass rounded-xl p-6 border border-surface-border space-y-4">
             <h3 className="text-sm font-semibold text-brand-400 uppercase tracking-wide">Recommendations</h3>
             {[
-              ["Best Platform",  optimization.recommended_platform, "text-brand-300"],
-              ["Best Time",      optimization.recommended_time || "—", "text-emerald-300"],
-              ["Rec. Budget",    optimization.recommended_budget ? `$${optimization.recommended_budget}` : "—", "text-amber-300"],
-              ["Confidence",     `${(optimization.confidence * 100).toFixed(1)}%`, "text-cyan-300"],
+              ["Best Platform", optimization.recommended_platform,                                             "text-brand-300"],
+              ["Best Time",     optimization.recommended_time || "—",                                          "text-emerald-300"],
+              ["Rec. Budget",   optimization.recommended_budget ? `$${optimization.recommended_budget}` : "—", "text-amber-300"],
+              ["Confidence",    `${(optimization.confidence * 100).toFixed(1)}%`,                              "text-cyan-300"],
             ].map(([k, v, c]) => (
               <div key={k} className="flex justify-between items-center">
                 <span className="text-xs text-slate-500">{k}</span>

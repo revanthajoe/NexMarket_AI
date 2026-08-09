@@ -37,6 +37,12 @@ async def lifespan(app: FastAPI):
     import os
     os.makedirs(settings.POSTER_UPLOAD_DIR, exist_ok=True)
 
+    if settings.is_sqlite:
+        from app.db.session import Base, engine
+
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
     # Pre-warm ML models in background (non-blocking)
     import asyncio
 

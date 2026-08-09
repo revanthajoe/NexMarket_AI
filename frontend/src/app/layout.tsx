@@ -1,13 +1,16 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Sidebar } from "@/components/ui/Sidebar";
-import { Toaster } from "react-hot-toast";
+import { ToasterProvider } from "@/components/ui/ToasterProvider";
 
 export const metadata: Metadata = {
   title: "NexMarket AI — AI Marketing Automation Platform",
   description:
     "Generate posters, ad copy, and automatically post campaigns across all platforms with AI-powered optimization.",
   keywords: "AI marketing, campaign automation, social media posting, LSTM forecasting",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({
@@ -20,6 +23,10 @@ export default function RootLayout({
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
+        />
       </head>
       <body className="bg-surface text-slate-200 flex h-screen overflow-hidden">
         <Sidebar />
@@ -28,17 +35,9 @@ export default function RootLayout({
             {children}
           </div>
         </main>
-        <Toaster
-          position="bottom-right"
-          toastOptions={{
-            style: {
-              background: "#17162a",
-              color: "#e2e8f0",
-              border: "1px solid #2d2b4e",
-            },
-          }}
-        />
+        <ToasterProvider />
       </body>
     </html>
   );
 }
+

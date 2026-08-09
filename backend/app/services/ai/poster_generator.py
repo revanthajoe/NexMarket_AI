@@ -45,6 +45,9 @@ class PosterGeneratorService:
         )
         logger.info("poster_generate variation=%d provider=%s", variation, settings.IMAGE_PROVIDER)
 
+        if settings.IMAGE_PROVIDER == "mock":
+            return await self._generate_mock(prompt, product_name, variation)
+
         try:
             from ai.inference_manager import inference_manager
             return await inference_manager.generate_poster(prompt, product_name, variation)

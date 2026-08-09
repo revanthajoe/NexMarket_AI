@@ -16,8 +16,9 @@ router = APIRouter(prefix="/sentiment", tags=["Sentiment"])
 async def analyze_sentiment(
     payload: SentimentRequest, db: AsyncSession = Depends(get_db)
 ):
-    results = await sentiment_service.analyze_batch(payload.texts, payload.campaign_id)
-    summary = sentiment_service.summarize(results)
+    analysis = await sentiment_service.analyze(payload.texts, payload.campaign_id)
+    results = analysis["results"]
+    summary = analysis["summary"]
 
     for r in results:
         record = SentimentResult(

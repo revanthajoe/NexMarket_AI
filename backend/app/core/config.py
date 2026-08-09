@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from pathlib import Path
 from typing import List, Literal
 
 from pydantic import AnyHttpUrl, field_validator
@@ -36,6 +37,29 @@ class Settings(BaseSettings):
     # ── Database ──────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://nexmarket:nexmarket@localhost:5432/nexmarket_db"
     SYNC_DATABASE_URL: str = "postgresql://nexmarket:nexmarket@localhost:5432/nexmarket_db"
+    USE_SQLITE_FALLBACK: bool = True
+    SQLITE_DB_PATH: str = "./nexmarket.db"
+
+    def _sqlite_path(self) -> str:
+        return Path(self.SQLITE_DB_PATH).expanduser().resolve().as_posix()
+
+    @property
+    def effective_database_url(self) -> str:
+        if self.APP_ENV == "development" and self.USE_SQLITE_FALLBACK:
+            if self.DATABASE_URL.startswith(("postgresql://", "postgresql+asyncpg://")):
+                return f"sqlite+aiosqlite:///{self._sqlite_path()}"
+        return self.DATABASE_URL
+
+    @property
+    def effective_sync_database_url(self) -> str:
+        if self.APP_ENV == "development" and self.USE_SQLITE_FALLBACK:
+            if self.SYNC_DATABASE_URL.startswith(("postgresql://", "postgresql+asyncpg://")):
+                return f"sqlite:///{self._sqlite_path()}"
+        return self.SYNC_DATABASE_URL
+
+    @property
+    def is_sqlite(self) -> bool:
+        return self.effective_database_url.startswith("sqlite+")
 
     # ── LLM ───────────────────────────────────────────────────────
     LLM_PROVIDER: Literal["openai", "gemini", "local"] = "openai"

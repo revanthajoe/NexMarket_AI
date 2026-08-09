@@ -3,17 +3,74 @@
  * Thin wrapper around fetch/axios for all backend calls.
  */
 
-const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+let activeBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
+const FALLBACK_PORTS = [8000, 8001, 8002, 8003, 8004, 8005];
 
 async function req<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...options.headers },
-    ...options,
-  });
+  let res: Response | null = null;
+  let fetchError: unknown = null;
+
+  // Fault tolerance: Automatically scan common ports if local backend shifts
+  if (activeBase.match(/(localhost|127\.0\.0\.1):\d+/)) {
+    const currentPortMatch = activeBase.match(/(?:localhost|127\.0\.0\.1):(\d+)/);
+    const currentPort = currentPortMatch ? parseInt(currentPortMatch[1]) : 8000;
+    
+    // Always try the known active port first, then fallbacks
+    const portsToTry = [...new Set([currentPort, ...FALLBACK_PORTS])];
+
+    for (const port of portsToTry) {
+      const testBase = activeBase.replace(/(localhost|127\.0\.0\.1):\d+/, `$1:${port}`);
+      try {
+        res = await fetch(`${testBase}${path}`, {
+          headers: { "Content-Type": "application/json", ...options.headers },
+          ...options,
+        });
+        
+        // Request connected! Update activeBase so future requests are fast
+        activeBase = testBase;
+        fetchError = null;
+        break;
+      } catch (err: unknown) {
+        fetchError = err; // Connection refused, try next port
+      }
+    }
+  } else {
+    try {
+      res = await fetch(`${activeBase}${path}`, {
+        headers: { "Content-Type": "application/json", ...options.headers },
+        ...options,
+      });
+    } catch (err: unknown) {
+      fetchError = err;
+    }
+  }
+
+  if (fetchError || !res) {
+    throw new Error("Failed to connect to the backend. Please ensure uvicorn is running.");
+  }
+
   if (!res.ok) {
+    const contentType = res.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const data = await res.json();
+      const detail = data?.detail;
+      if (Array.isArray(detail)) {
+        const message = detail
+          .map((item: { loc?: Array<string | number>; msg?: string }) => {
+            const field = item.loc?.slice(1).join(".") || "request";
+            return `${field}: ${item.msg || "invalid value"}`;
+          })
+          .join("; ");
+        throw new Error(message || `HTTP ${res.status}`);
+      }
+      if (typeof detail === "string") {
+        throw new Error(detail);
+      }
+      throw new Error(JSON.stringify(data) || `HTTP ${res.status}`);
+    }
     const err = await res.text();
     throw new Error(err || `HTTP ${res.status}`);
   }

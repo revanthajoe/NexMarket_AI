@@ -68,6 +68,9 @@ class AdCopyGeneratorService:
     ) -> dict[str, dict]:
         logger.info("adcopy_generate platforms=%s provider=%s", platforms, settings.LLM_PROVIDER)
 
+        if settings.LLM_PROVIDER == "mock":
+            return self._generate_demo(product_name, offer, target_audience, platforms)
+
         try:
             from ai.inference_manager import inference_manager
             system_prompt = AD_COPY_SYSTEM_PROMPT
