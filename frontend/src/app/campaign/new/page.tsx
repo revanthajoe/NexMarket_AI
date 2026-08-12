@@ -283,31 +283,4 @@ export default function NewCampaignPage() {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="glass rounded-2xl p-6 border border-surface-border space-y-4">
-      <h2 className="text-sm font-semibold text-brand-400 uppercase tracking-wider">{title}</h2>
-      {children}
-    </div>
-  );
-}
 
-function Field({ label, required, children }: {
-  label: string; required?: boolean; children: React.ReactNode;
-}) {
-  // Derive a stable id from the label text for htmlFor association.
-  // The input children already have explicit `id` attributes that match.
-  const fieldId = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-
-  return (
-    <div className="space-y-1.5">
-      <label
-        htmlFor={fieldId}
-        className="text-xs font-medium text-slate-400 uppercase tracking-wide"
-      >
-        {label}{required && <span className="text-brand-400 ml-0.5">*</span>}
-      </label>
-      {children}
-    </div>
-  );
-}
