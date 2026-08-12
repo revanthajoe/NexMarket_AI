@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 _SPEC      = get_spec("sdxl")
 _UPLOAD    = Path(settings.POSTER_UPLOAD_DIR)
-_STEPS     = 20          # inference steps — good quality / speed trade-off
+_STEPS     = 15          # inference steps — good quality / speed trade-off
 _GUIDANCE  = 7.5         # classifier-free guidance scale
 
 
@@ -58,12 +58,24 @@ class SDXLService(BaseModelService):
 
         logger.info("sdxl loading model_id=%s dtype=%s device=%s", _SPEC.model_id, dtype, device)
 
-        pipe = StableDiffusionXLPipeline.from_pretrained(
-            _SPEC.model_id,
+        load_kwargs = dict(
             torch_dtype      = dtype,
             use_safetensors  = True,
             variant          = "fp16" if dtype == torch.float16 else None,
         )
+
+        # Try loading from local cache first (no network call, instant).
+        # Only attempt a network download if the model isn't cached at all.
+        try:
+            pipe = StableDiffusionXLPipeline.from_pretrained(
+                _SPEC.model_id, local_files_only=True, **load_kwargs,
+            )
+            logger.info("sdxl loaded from local cache")
+        except (OSError, EnvironmentError):
+            logger.warning("sdxl not in local cache — downloading from Hub (this is a one-time operation)")
+            pipe = StableDiffusionXLPipeline.from_pretrained(
+                _SPEC.model_id, local_files_only=False, **load_kwargs,
+            )
 
         # ── Memory optimisations ──────────────────────────────────────────────
         if device_manager.info.has_cuda:
@@ -110,6 +122,8 @@ class SDXLService(BaseModelService):
         product_name: str,
         variation: int = 0,
         negative_prompt: Optional[str] = None,
+        width: int = 768,
+        height: int = 768,
     ) -> dict:
         """
         Generate one poster image.
@@ -131,13 +145,20 @@ class SDXLService(BaseModelService):
         logger.info("sdxl generating variation=%d", variation)
         memory_manager.log_vram("before_sdxl_inference")
 
+        # Clamp to SDXL-friendly multiples of 8
+        safe_w = max(512, (width  // 8) * 8)
+        safe_h = max(512, (height // 8) * 8)
+        logger.info("sdxl generating %dx%d variation=%d", safe_w, safe_h, variation)
+
         with torch.no_grad():
             result = self._pipeline(
-                prompt          = prompt,
-                negative_prompt = negative_prompt,
-                num_inference_steps = _STEPS,
-                guidance_scale  = _GUIDANCE,
+                prompt                = prompt,
+                negative_prompt       = negative_prompt,
+                num_inference_steps   = _STEPS,
+                guidance_scale        = _GUIDANCE,
                 num_images_per_prompt = 1,
+                width                 = safe_w,
+                height                = safe_h,
             )
 
         image   = result.images[0]

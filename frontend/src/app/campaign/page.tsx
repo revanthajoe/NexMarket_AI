@@ -52,10 +52,10 @@ export default function CampaignsPage() {
         </div>
       ) : (
         <div className="grid gap-4">
-          {campaigns.map((c) => (
+          {campaigns.map((c, i) => (
             <div key={c.id}
-              className="glass rounded-xl border border-surface-border p-5 hover:border-brand-500/40 
-                         transition-all duration-200 hover:shadow-card-hover group">
+              className="glass-dynamic rounded-xl p-5 animate-fade-in-up group cursor-pointer"
+              style={{ animationDelay: `${i * 50}ms` }}>
               <div className="flex items-center justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-3 mb-1">

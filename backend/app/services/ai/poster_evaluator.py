@@ -35,7 +35,7 @@ _MOCK_EVALUATION = {
 
 class PosterEvaluatorService:
 
-    async def evaluate(self, image_url: str) -> dict:
+    async def evaluate(self, image_url: str, context: str = "") -> dict:
         logger.info("poster_evaluate url=%s provider=%s", image_url, settings.VISION_PROVIDER)
 
         if settings.VISION_PROVIDER == "mock":
@@ -43,10 +43,12 @@ class PosterEvaluatorService:
 
         try:
             from ai.inference_manager import inference_manager
+            from app.prompts.templates import VISION_EVALUATION_SYSTEM_PROMPT, build_vision_evaluation_prompt
+            user_prompt = build_vision_evaluation_prompt(context)
             raw = await inference_manager.evaluate_poster(
                 image_url,
                 VISION_EVALUATION_SYSTEM_PROMPT,
-                VISION_EVALUATION_USER_PROMPT,
+                user_prompt,
             )
             if raw:
                 return self.normalize(raw)

@@ -22,6 +22,7 @@ from app.api.v1.endpoints import (
     optimization,
     analytics,
     n8n_webhooks,
+    brand_kit,
 )
 
 setup_logging()
@@ -39,8 +40,13 @@ async def lifespan(app: FastAPI):
 
     if settings.is_sqlite:
         from app.db.session import Base, engine
+        from sqlalchemy import text
 
         async with engine.begin() as conn:
+            # Enable WAL mode before table creation — critical for concurrent writes
+            await conn.execute(text("PRAGMA journal_mode=WAL"))
+            await conn.execute(text("PRAGMA synchronous=NORMAL"))
+            await conn.execute(text("PRAGMA busy_timeout=5000"))
             await conn.run_sync(Base.metadata.create_all)
 
     # Pre-warm ML models in background (non-blocking)
@@ -100,6 +106,7 @@ app.include_router(forecast.router, prefix=PREFIX)
 app.include_router(optimization.router, prefix=PREFIX)
 app.include_router(analytics.router, prefix=PREFIX)
 app.include_router(n8n_webhooks.router, prefix=PREFIX)
+app.include_router(brand_kit.router, prefix=PREFIX)
 
 
 @app.get("/health")

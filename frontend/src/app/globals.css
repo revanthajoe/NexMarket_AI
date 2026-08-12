@@ -117,3 +117,54 @@ body {
 }
 
 .input-dark::placeholder { color: #64748b; }
+
+/* Dynamic Animations & Interactions */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes scaleUp {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes float {
+  0% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+  100% { transform: translateY(0); }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-scale-up {
+  animation: scaleUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Stagger delays for list items */
+.delay-75 { animation-delay: 75ms; opacity: 0; }
+.delay-100 { animation-delay: 100ms; opacity: 0; }
+.delay-150 { animation-delay: 150ms; opacity: 0; }
+.delay-200 { animation-delay: 200ms; opacity: 0; }
+.delay-300 { animation-delay: 300ms; opacity: 0; }
+
+/* Premium hover effects */
+.hover-float:hover {
+  animation: float 2s ease-in-out infinite;
+}
+
+.glass-dynamic {
+  background: rgba(23, 22, 42, 0.6);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-dynamic:hover {
+  background: rgba(23, 22, 42, 0.8);
+  border: 1px solid rgba(99, 102, 241, 0.4);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2), 0 0 20px rgba(99, 102, 241, 0.1);
+  transform: translateY(-2px);
+}

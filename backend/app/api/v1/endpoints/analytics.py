@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -79,35 +79,3 @@ async def get_campaign_analytics(campaign_id: str, db: AsyncSession = Depends(ge
     ]
 
 
-@router.post("/campaign/{campaign_id}/seed-demo")
-async def seed_demo_analytics(campaign_id: str, db: AsyncSession = Depends(get_db)):
-    """Seed 14 days of demo analytics data for LSTM forecasting demo."""
-    import random
-    from datetime import datetime, timedelta
-
-    campaign = await db.get(Campaign, campaign_id)
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-
-    base_date = datetime.utcnow() - timedelta(days=14)
-    platforms = ["instagram", "facebook"]
-    rng = random.Random(42)
-
-    for day in range(14):
-        for platform in platforms:
-            event = AnalyticsEvent(
-                campaign_id=campaign_id,
-                platform=platform,
-                event_date=base_date + timedelta(days=day),
-                impressions=rng.randint(1000, 10000),
-                clicks=rng.randint(50, 500),
-                likes=rng.randint(30, 400),
-                shares=rng.randint(5, 80),
-                comments=rng.randint(10, 120),
-                reach=rng.randint(800, 8000),
-                ctr=round(rng.uniform(0.01, 0.08), 4),
-                spend=round(rng.uniform(5, 50), 2),
-            )
-            db.add(event)
-
-    return {"status": "ok", "days_seeded": 14, "platforms": platforms}

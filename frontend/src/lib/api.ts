@@ -6,10 +6,17 @@
 let activeBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 const FALLBACK_PORTS = [8000, 8001, 8002, 8003, 8004, 8005];
 
+const REQUEST_TIMEOUT_MS = 30_000;
+// AI-heavy endpoints (SDXL poster generation, vision evaluation) need much longer
+const AI_REQUEST_TIMEOUT_MS = 7_200_000; // 2 hours
+
 async function req<T>(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
 ): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   let res: Response | null = null;
   let fetchError: unknown = null;
 
@@ -23,12 +30,25 @@ async function req<T>(
 
     for (const port of portsToTry) {
       const testBase = activeBase.replace(/(localhost|127\.0\.0\.1):\d+/, `$1:${port}`);
+      const isFormData = options.body && typeof (options.body as any).append === "function";
+      
+      // We must completely omit Content-Type for FormData so the browser sets the boundary
+      const customHeaders: Record<string, string> = { ...(options.headers as Record<string, string>) };
+      if (!isFormData) {
+        customHeaders["Content-Type"] = "application/json";
+      } else {
+        delete customHeaders["Content-Type"];
+      }
+
+      const fetchOpts = {
+        ...options,
+        headers: customHeaders,
+        signal: controller.signal,
+      };
+
       try {
-        res = await fetch(`${testBase}${path}`, {
-          headers: { "Content-Type": "application/json", ...options.headers },
-          ...options,
-        });
-        
+        res = await fetch(`${testBase}${path}`, fetchOpts);
+
         // Request connected! Update activeBase so future requests are fast
         activeBase = testBase;
         fetchError = null;
@@ -39,17 +59,35 @@ async function req<T>(
     }
   } else {
     try {
-      res = await fetch(`${activeBase}${path}`, {
-        headers: { "Content-Type": "application/json", ...options.headers },
+      const isFormData = options.body && typeof (options.body as any).append === "function";
+      
+      const customHeaders: Record<string, string> = { ...(options.headers as Record<string, string>) };
+      if (!isFormData) {
+        customHeaders["Content-Type"] = "application/json";
+      } else {
+        delete customHeaders["Content-Type"];
+      }
+
+      const fetchOpts = {
         ...options,
-      });
+        headers: customHeaders,
+        signal: controller.signal,
+      };
+
+      res = await fetch(`${activeBase}${path}`, fetchOpts);
     } catch (err: unknown) {
       fetchError = err;
     }
   }
 
+  clearTimeout(timeoutId);
+
   if (fetchError || !res) {
-    throw new Error("Failed to connect to the backend. Please ensure uvicorn is running.");
+    const isTimeout = fetchError instanceof DOMException && fetchError.name === "AbortError";
+    throw new Error(isTimeout
+      ? "Request timed out. Please ensure the backend is running."
+      : "Failed to connect to the backend. Please ensure uvicorn is running."
+    );
   }
 
   if (!res.ok) {
@@ -91,13 +129,15 @@ export const api = {
   },
 
   posters: {
+    getByCampaign: (campaign_id: string) =>
+      req<Poster[]>(`/posters/campaign/${campaign_id}`),
     generate: (campaign_id: string, variations = 1) =>
       req<Poster[]>("/posters/generate", {
         method: "POST",
         body: JSON.stringify({ campaign_id, variations }),
-      }),
+      }, AI_REQUEST_TIMEOUT_MS),
     evaluate: (poster_id: string) =>
-      req<PosterEvaluation>(`/posters/${poster_id}/evaluate`, { method: "POST" }),
+      req<PosterEvaluation>(`/posters/${poster_id}/evaluate`, { method: "POST" }, AI_REQUEST_TIMEOUT_MS),
   },
 
   adcopy: {
@@ -159,8 +199,6 @@ export const api = {
     dashboard: () => req<DashboardSummary>("/analytics/dashboard"),
     getCampaign: (campaign_id: string) =>
       req<AnalyticsEvent[]>(`/analytics/campaign/${campaign_id}`),
-    seedDemo: (campaign_id: string) =>
-      req(`/analytics/campaign/${campaign_id}/seed-demo`, { method: "POST" }),
   },
 
   n8n: {
@@ -171,6 +209,23 @@ export const api = {
       }),
     status: (campaign_id: string) =>
       req(`/n8n/status/${campaign_id}`),
+  },
+
+  brandKit: {
+    get: (campaign_id: string) =>
+      req<BrandKitInfo>(`/brand-kit/${campaign_id}`),
+    setMeta: (campaign_id: string, language: string, brand_color_hex?: string) => {
+      const form = new FormData();
+      form.append("language", language);
+      if (brand_color_hex) form.append("brand_color_hex", brand_color_hex);
+      return req(`/brand-kit/${campaign_id}/meta`, { method: "POST", body: form });
+    },
+    uploadAsset: (campaign_id: string, asset_type: string, file: File) => {
+      const form = new FormData();
+      form.append("asset_type", asset_type);
+      form.append("file", file);
+      return req(`/brand-kit/${campaign_id}/upload`, { method: "POST", body: form });
+    },
   },
 };
 
@@ -211,6 +266,10 @@ export interface Poster {
   prompt_used?: string;
   provider: string;
   variation_index: number;
+  metadata_?: {
+    visual_url?: string;
+    [key: string]: any;
+  };
   created_at: string;
 }
 
@@ -350,4 +409,14 @@ export interface N8nResponse {
   status: string;
   message: string;
   data?: Record<string, unknown>;
+}
+
+export interface BrandKitInfo {
+  campaign_id: string;
+  logo?: string;
+  product?: string;
+  font_regular?: string;
+  font_bold?: string;
+  language: string;
+  brand_color_hex?: string;
 }

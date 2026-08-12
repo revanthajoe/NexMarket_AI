@@ -18,21 +18,23 @@ def build_poster_prompt(
     variation: int = 0,
 ) -> str:
     style_map = {
-        0: "vibrant, bold, modern",
-        1: "minimalist, clean, professional",
-        2: "dark luxury, premium, elegant",
-        3: "playful, colorful, energetic",
+        0: "vibrant saffron-gold-teal palette, bold Devanagari-inspired typography, modern Indian design",
+        1: "minimalist, clean, professional, royal blue and white, contemporary Indian branding",
+        2: "premium dark luxury, gold accents, elegant rangoli-inspired patterns, festive Indian aesthetics",
+        3: "playful, colorful, energetic, bright marigold and magenta tones, celebratory Indian vibe",
     }
-    variation_style = style_map.get(variation, "vibrant, bold, modern")
+    variation_style = style_map.get(variation, "vibrant, bold, modern Indian design")
     brand_note = f", {brand_style} brand identity" if brand_style else ""
 
     return (
-        f"Create a professional marketing poster for '{product_name}'. "
+        f"Create a professional Indian marketing poster for '{product_name}'. "
         f"Offer: {offer}. Target audience: {target_audience}. "
         f"Campaign goal: {campaign_goal}. "
         f"Style: {variation_style}{brand_note}. "
-        f"Include a clear CTA button, product name, offer text, and visually striking background. "
-        f"Make it suitable for digital advertising. High quality, 1024x1024."
+        f"Design for the Indian market — use culturally relevant aesthetics, "
+        f"warm and inviting colour palette, and Indian digital advertising style. "
+        f"Include a clear CTA button, product name in bold, offer text prominently displayed, "
+        f"and a visually striking background. High quality, 1024x1024."
     )
 
 
@@ -104,27 +106,37 @@ Make each platform version feel native to that platform."""
 
 VISION_EVALUATION_SYSTEM_PROMPT = """You are an expert UI/UX designer and marketing creative director.
 Evaluate marketing posters with deep expertise in visual hierarchy, branding, and advertising effectiveness.
+Compare the poster STRICTLY against the provided campaign context to detect semantic mismatches.
 Always return valid JSON only."""
 
-VISION_EVALUATION_USER_PROMPT = """Evaluate this marketing poster on the following criteria.
-Score each dimension from 0-100. Be critical and specific.
 
+def build_vision_evaluation_prompt(context: str = "") -> str:
+    context_block = f"\nCampaign Context:\n{context}\n" if context else ""
+    return f"""Evaluate this marketing poster against the campaign context below.
+Score each dimension from 0-100. Be critical and specific.
+Detect any semantic mismatches (e.g., wrong product category, wrong theme, wrong audience).
+{context_block}
 Return ONLY this JSON structure (no markdown, no extra text):
-{
+{{
   "overall_score": <0-100>,
-  "dimensions": {
+  "dimensions": {{
     "readability": <0-100>,
     "layout": <0-100>,
     "branding": <0-100>,
     "contrast": <0-100>,
     "cta_visibility": <0-100>,
     "visual_appeal": <0-100>
-  },
+  }},
   "strengths": ["...", "...", "..."],
   "weaknesses": ["...", "...", "..."],
   "suggestions": ["...", "...", "..."],
+  "detected_mismatch": [],
   "verdict": "excellent|good|needs_improvement|poor"
-}"""
+}}"""
+
+
+# Keep the static version as a fallback constant
+VISION_EVALUATION_USER_PROMPT = build_vision_evaluation_prompt()
 
 
 # ─── Optimization Prompt ─────────────────────────────────────────────────────

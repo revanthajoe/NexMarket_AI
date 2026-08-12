@@ -4,12 +4,11 @@ All services import Settings from here; never read os.environ directly.
 """
 from __future__ import annotations
 
-import os
+
 from functools import lru_cache
 from pathlib import Path
 from typing import List, Literal
 
-from pydantic import AnyHttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

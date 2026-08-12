@@ -39,12 +39,15 @@ class InferenceManager:
         prompt: str,
         product_name: str,
         variation: int = 0,
+        negative_prompt: Optional[str] = None,
+        width: int = 768,
+        height: int = 768,
     ) -> dict:
         """Generate one marketing poster image with SDXL."""
         async with model_manager.session("sdxl") as svc:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(
-                None, lambda: svc.generate(prompt, product_name, variation)
+                None, lambda: svc.generate(prompt, product_name, variation, negative_prompt, width, height)
             )
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -75,6 +78,19 @@ class InferenceManager:
         temperature: float = 0.7,
     ) -> dict:
         """Generate platform-specific ad copy with Qwen2.5-3B-Instruct."""
+        async with model_manager.session("qwen_llm") as svc:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None, lambda: svc.generate_json(system_prompt, user_prompt, temperature)
+            )
+
+    async def generate_visual_spec(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.7,
+    ) -> dict:
+        """Generate structured visual spec with Qwen2.5-3B-Instruct."""
         async with model_manager.session("qwen_llm") as svc:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(

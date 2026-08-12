@@ -1,6 +1,7 @@
 """Poster generation + evaluation endpoints."""
 from __future__ import annotations
 
+import logging
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,7 +13,17 @@ from app.schemas.schemas import PosterEvaluationRead, PosterGenerateRequest, Pos
 from app.services.ai.poster_evaluator import poster_evaluator
 from app.services.ai.poster_generator import poster_generator
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/posters", tags=["Posters"])
+
+
+@router.get("/campaign/{campaign_id}", response_model=List[PosterRead])
+async def list_posters_by_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select
+    result = await db.execute(
+        select(Poster).where(Poster.campaign_id == campaign_id).order_by(Poster.variation_index)
+    )
+    return result.scalars().all()
 
 
 @router.post("/generate", response_model=List[PosterRead])
@@ -23,27 +34,54 @@ async def generate_posters(
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
+    logger.info(
+        "poster_generate_start campaign_id=%s variations=%d",
+        payload.campaign_id, payload.variations,
+    )
+
     results = []
     for i in range(payload.variations):
-        gen = await poster_generator.generate(
-            product_name=campaign.product_name,
-            offer=campaign.offer,
-            target_audience=campaign.target_audience,
-            campaign_goal=campaign.campaign_goal,
-            brand_style=payload.style_override or campaign.brand_style,
-            variation=i,
-        )
+        try:
+            gen = await poster_generator.generate(
+                campaign_name=campaign.name,
+                product_name=campaign.product_name,
+                description=campaign.description,
+                offer=campaign.offer,
+                target_audience=campaign.target_audience,
+                campaign_goal=campaign.campaign_goal,
+                brand_style=payload.style_override or campaign.brand_style,
+                variation=i,
+                platform=campaign.preferred_platform or "instagram",
+                campaign_id=campaign.id,
+            )
+        except Exception as exc:
+            logger.error(
+                "poster_generate_error campaign_id=%s variation=%d error=%s",
+                payload.campaign_id, i, exc, exc_info=True,
+            )
+            raise HTTPException(status_code=500, detail=f"Poster generation failed: {exc}")
+
         poster = Poster(
             campaign_id=campaign.id,
             image_url=gen["image_url"],
             prompt_used=gen["prompt_used"],
             provider=gen["provider"],
             variation_index=i,
+            metadata_=gen.get("metadata_")
         )
         db.add(poster)
         await db.flush()
         await db.refresh(poster)
         results.append(poster)
+        logger.info(
+            "poster_generate_saved poster_id=%s url=%s",
+            poster.id, poster.image_url,
+        )
+
+    # Commit so created_at is persisted and populated on returned objects
+    await db.commit()
+    for p in results:
+        await db.refresh(p)
 
     return results
 
@@ -54,8 +92,21 @@ async def evaluate_poster(poster_id: str, db: AsyncSession = Depends(get_db)):
     if not poster:
         raise HTTPException(status_code=404, detail="Poster not found")
 
-    raw = await poster_evaluator.evaluate(poster.image_url)
-    normalized = poster_evaluator.normalize(raw)
+    logger.info("poster_evaluate_start poster_id=%s url=%s", poster_id, poster.image_url)
+
+    try:
+        if poster.metadata_ and "evaluation" in poster.metadata_:
+            logger.info("poster_evaluate using cached evaluation from metadata")
+            normalized = poster.metadata_["evaluation"]
+        else:
+            # poster_evaluator.evaluate() already calls normalize() internally;
+            # the returned dict is the flat, schema-ready structure — do NOT re-normalize.
+            normalized = await poster_evaluator.evaluate(poster.image_url)
+    except Exception as exc:
+        logger.error(
+            "poster_evaluate_error poster_id=%s error=%s", poster_id, exc, exc_info=True
+        )
+        raise HTTPException(status_code=500, detail=f"Poster evaluation failed: {exc}")
 
     evaluation = PosterEvaluation(
         poster_id=poster_id,
@@ -69,11 +120,12 @@ async def evaluate_poster(poster_id: str, db: AsyncSession = Depends(get_db)):
         strengths=normalized["strengths"],
         weaknesses=normalized["weaknesses"],
         suggestions=normalized["suggestions"],
-        raw_response=normalized["raw_response"],
+        raw_response=normalized.get("raw_response", {}),
     )
     db.add(evaluation)
     await db.flush()
     await db.refresh(evaluation)
+    logger.info("poster_evaluate_saved eval_id=%s score=%s", evaluation.id, evaluation.overall_score)
     return evaluation
 
 

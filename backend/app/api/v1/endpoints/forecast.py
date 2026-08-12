@@ -40,7 +40,11 @@ async def create_forecast(
         for e in events
     ]
 
-    forecast_data = lstm_forecast_service.forecast(history, payload.horizon_days)
+    forecast_data = await lstm_forecast_service.forecast(
+        campaign_id=payload.campaign_id,
+        analytics_rows=history,
+        horizon_days=payload.horizon_days,
+    )
 
     record = EngagementForecast(
         campaign_id=payload.campaign_id,

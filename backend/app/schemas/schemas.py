@@ -45,6 +45,8 @@ class CampaignSummary(BaseModel):
     name: str
     status: str
     preferred_platform: str
+    product_name: str
+    campaign_goal: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -181,9 +183,10 @@ class ForecastRead(BaseModel):
     model_version: str
     created_at: datetime
 
-    model_config = {"protected_namespaces": ()}
-
-    model_config = {"from_attributes": True}
+    model_config = {
+        "protected_namespaces": (),
+        "from_attributes": True
+    }
 
 
 # ─── Optimization ────────────────────────────────────────────────────────────

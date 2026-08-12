@@ -55,7 +55,7 @@ class QwenVLService(BaseModelService):
     # ── BaseModelService interface ────────────────────────────────────────────
 
     def _do_load(self) -> None:
-        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+        from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 
         bnb_config = get_bnb_4bit_config() if _SPEC.use_4bit else None
         
@@ -81,7 +81,7 @@ class QwenVLService(BaseModelService):
             load_kwargs["torch_dtype"] = device_manager.compute_dtype()
             load_kwargs["device_map"]  = "auto" if device_manager.info.has_cuda else None
 
-        self._model = Qwen2VLForConditionalGeneration.from_pretrained(
+        self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             _SPEC.model_id,
             **load_kwargs,
         )

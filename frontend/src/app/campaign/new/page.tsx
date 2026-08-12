@@ -12,6 +12,24 @@ const GOALS = [
   "engagement", "app_downloads", "website_traffic",
 ];
 
+const Field = ({ label, htmlFor, required, children }: { label: string, htmlFor?: string, required?: boolean, children: React.ReactNode }) => (
+  <div className="space-y-1.5">
+    <label htmlFor={htmlFor} className="text-xs font-medium text-slate-400 uppercase tracking-wide">
+      {label} {required && <span className="text-brand-400">*</span>}
+    </label>
+    {children}
+  </div>
+);
+
+const Section = ({ title, children }: { title: string, children: React.ReactNode }) => (
+  <div className="glass-dynamic rounded-2xl p-6 border border-surface-border animate-fade-in-up">
+    <h2 className="text-lg font-semibold text-white mb-4">{title}</h2>
+    <div className="space-y-4">
+      {children}
+    </div>
+  </div>
+);
+
 export default function NewCampaignPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -80,8 +98,7 @@ export default function NewCampaignPage() {
 
       router.push(`/campaign/${campaign.id}`);
     } catch (err: unknown) {
-      toast.error("Failed to create campaign");
-      console.error(err);
+      toast.error(err instanceof Error ? err.message : "Failed to create campaign");
     } finally {
       setLoading(false);
     }
@@ -108,8 +125,10 @@ export default function NewCampaignPage() {
       {/* Form */}
       <form onSubmit={handleSubmit} className="space-y-6">
         <Section title="Campaign Info">
-          <Field label="Campaign Name" required>
+          <Field label="Campaign Name" htmlFor="campaign-name" required>
             <input
+              id="campaign-name"
+              name="campaign-name"
               className="input-dark"
               placeholder="Summer Sale 2024"
               value={form.name}
@@ -117,8 +136,10 @@ export default function NewCampaignPage() {
               required
             />
           </Field>
-          <Field label="Product / Service Name" required>
+          <Field label="Product / Service Name" htmlFor="product-name" required>
             <input
+              id="product-name"
+              name="product-name"
               className="input-dark"
               placeholder="CloudNotes Pro"
               value={form.product_name}
@@ -126,8 +147,10 @@ export default function NewCampaignPage() {
               required
             />
           </Field>
-          <Field label="Product Description" required>
+          <Field label="Product Description" htmlFor="product-description" required>
             <textarea
+              id="product-description"
+              name="product-description"
               className="input-dark h-24 resize-none"
               placeholder="Describe your product — what it does and why people love it"
               value={form.description}
@@ -138,8 +161,10 @@ export default function NewCampaignPage() {
         </Section>
 
         <Section title="Offer & Audience">
-          <Field label="Offer / Promotion" required>
+          <Field label="Offer / Promotion" htmlFor="offer" required>
             <input
+              id="offer"
+              name="offer"
               className="input-dark"
               placeholder="50% off annual subscription"
               value={form.offer}
@@ -147,8 +172,10 @@ export default function NewCampaignPage() {
               required
             />
           </Field>
-          <Field label="Target Audience" required>
+          <Field label="Target Audience" htmlFor="target-audience" required>
             <input
+              id="target-audience"
+              name="target-audience"
               className="input-dark"
               placeholder="Remote workers and college students aged 22-35"
               value={form.target_audience}
@@ -157,8 +184,10 @@ export default function NewCampaignPage() {
             />
           </Field>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Campaign Goal" required>
+            <Field label="Campaign Goal" htmlFor="campaign-goal" required>
               <select
+                id="campaign-goal"
+                name="campaign-goal"
                 className="input-dark"
                 value={form.campaign_goal}
                 onChange={(e) => set("campaign_goal", e.target.value)}
@@ -170,8 +199,10 @@ export default function NewCampaignPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Preferred Platform" required>
+            <Field label="Preferred Platform" htmlFor="preferred-platform" required>
               <select
+                id="preferred-platform"
+                name="preferred-platform"
                 className="input-dark"
                 value={form.preferred_platform}
                 onChange={(e) => set("preferred_platform", e.target.value)}
@@ -186,10 +217,12 @@ export default function NewCampaignPage() {
           </div>
         </Section>
 
-        <Section title="Budget & Style (Optional)">
+        <Section title="Optional Settings">
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Budget (USD)">
+            <Field label="Budget (USD)" htmlFor="budget">
               <input
+                id="budget"
+                name="budget"
                 type="number"
                 className="input-dark"
                 placeholder="500"
@@ -198,8 +231,10 @@ export default function NewCampaignPage() {
                 onChange={(e) => set("budget", e.target.value ? Number(e.target.value) : undefined)}
               />
             </Field>
-            <Field label="Brand Style">
+            <Field label="Brand Style" htmlFor="brand-style">
               <input
+                id="brand-style"
+                name="brand-style"
                 className="input-dark"
                 placeholder="minimalist, dark, luxury…"
                 value={form.brand_style ?? ""}
@@ -260,9 +295,16 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Field({ label, required, children }: {
   label: string; required?: boolean; children: React.ReactNode;
 }) {
+  // Derive a stable id from the label text for htmlFor association.
+  // The input children already have explicit `id` attributes that match.
+  const fieldId = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
   return (
     <div className="space-y-1.5">
-      <label className="text-xs font-medium text-slate-400 uppercase tracking-wide">
+      <label
+        htmlFor={fieldId}
+        className="text-xs font-medium text-slate-400 uppercase tracking-wide"
+      >
         {label}{required && <span className="text-brand-400 ml-0.5">*</span>}
       </label>
       {children}

@@ -4,17 +4,16 @@ Backend does ALL AI logic; n8n is purely the orchestrator.
 """
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Dict
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.models.models import AdCopy, Campaign, Poster, SocialPost
 from app.schemas.schemas import N8nTriggerCampaign, N8nWebhookResponse
 from app.services.ai.ad_generator import ad_copy_generator
-from app.services.ai.lstm_forecast import lstm_forecast_service
 from app.services.ai.poster_evaluator import poster_evaluator
 from app.services.ai.poster_generator import poster_generator
 from app.services.optimization.optimizer import campaign_optimizer
@@ -31,7 +30,8 @@ async def n8n_trigger_campaign(
 ):
     """
     Main entry point called by n8n to kick off the full campaign pipeline.
-    Runs all steps async; n8n polls /n8n/status/{campaign_id} for progress.
+    Runs all steps async in a background task; each step is idempotent
+    (skips if results already exist) to prevent duplicate DB rows.
     """
     campaign = await db.get(Campaign, payload.campaign_id)
     if not campaign:
@@ -40,69 +40,154 @@ async def n8n_trigger_campaign(
     campaign.status = "generating"
 
     async def run_pipeline(campaign_id: str, steps: list):
+        import logging
+        from sqlalchemy import text
         from app.db.session import AsyncSessionLocal
 
+        log = logging.getLogger(__name__)
+
+        # Use a completely independent session — NullPool guarantees no
+        # connection sharing with the request that spawned this task.
         async with AsyncSessionLocal() as bg_db:
-            c = await bg_db.get(Campaign, campaign_id)
-            results = {}
+            # Apply WAL pragmas to this connection as well
+            await bg_db.execute(text("PRAGMA journal_mode=WAL"))
+            await bg_db.execute(text("PRAGMA busy_timeout=5000"))
 
-            if "poster" in steps:
-                gen = await poster_generator.generate(
-                    c.product_name, c.offer, c.target_audience, c.campaign_goal, c.brand_style
-                )
-                poster = Poster(campaign_id=c.id, **gen)
-                bg_db.add(poster)
-                await bg_db.flush()
-                results["poster_id"] = poster.id
+            try:
+                c = await bg_db.get(Campaign, campaign_id)
+                if not c:
+                    log.error("pipeline_abort campaign_id=%s not found", campaign_id)
+                    return
 
-                if "evaluate" in steps:
-                    raw = await poster_evaluator.evaluate(gen["image_url"])
-                    from app.models.models import PosterEvaluation
-                    norm = poster_evaluator.normalize(raw)
-                    ev = PosterEvaluation(poster_id=poster.id, **norm)
-                    bg_db.add(ev)
-                    await bg_db.flush()
+                results: dict = {}
 
-            if "adcopy" in steps:
-                copies = await ad_copy_generator.generate(
-                    c.product_name, c.description, c.offer,
-                    c.target_audience, c.campaign_goal,
-                    platforms=[c.preferred_platform] if c.preferred_platform != "all"
-                    else ["instagram", "facebook", "linkedin", "twitter"],
-                )
-                for platform, data in copies.items():
-                    ad = AdCopy(
-                        campaign_id=c.id, platform=platform,
-                        headline=data.get("headline"), body=data.get("body", ""),
-                        cta_variants=data.get("cta_variants"), hashtags=data.get("hashtags"),
-                    )
-                    bg_db.add(ad)
-                await bg_db.flush()
+                # ── Poster ────────────────────────────────────────────────
+                if "poster" in steps:
+                    # Idempotency: skip if poster already exists
+                    existing_posters = (await bg_db.execute(
+                        select(Poster).where(Poster.campaign_id == campaign_id).limit(1)
+                    )).scalars().all()
 
-            if "optimize" in steps:
-                opt = await campaign_optimizer.optimize(
-                    campaign_goal=c.campaign_goal, 
-                    target_audience=c.target_audience, 
-                    budget=c.budget
-                )
-                results["optimization"] = opt
+                    if existing_posters:
+                        log.info("pipeline_skip_poster campaign_id=%s already has posters", campaign_id)
+                        results["poster_id"] = existing_posters[0].id
+                    else:
+                        try:
+                            gen = await poster_generator.generate(
+                                c.product_name, c.offer, c.target_audience,
+                                c.campaign_goal, c.brand_style
+                            )
+                            poster = Poster(campaign_id=c.id, **gen)
+                            bg_db.add(poster)
+                            await bg_db.flush()
+                            await bg_db.refresh(poster)
+                            results["poster_id"] = poster.id
+                            log.info("pipeline_poster_done id=%s", poster.id)
+                        except Exception as exc:
+                            log.error("pipeline_poster_failed: %s", exc, exc_info=True)
 
-            if "post" in steps:
-                target_platform = results.get("optimization", {}).get(
-                    "recommended_platform", c.preferred_platform
-                )
-                sp = SocialPost(campaign_id=c.id, platform=target_platform, status="pending")
-                bg_db.add(sp)
-                await bg_db.flush()
-                text = f"{c.product_name} — {c.offer}"
-                image_url = None
-                if results.get("poster_id"):
-                    poster_obj = await bg_db.get(Poster, results["poster_id"])
-                    image_url = poster_obj.image_url if poster_obj else None
-                await social_posting_service.publish(bg_db, sp, text, image_url)
+                    # ── Evaluate ─────────────────────────────────────────
+                    if "evaluate" in steps and results.get("poster_id"):
+                        try:
+                            poster_obj = await bg_db.get(Poster, results["poster_id"])
+                            if poster_obj:
+                                raw = await poster_evaluator.evaluate(poster_obj.image_url)
+                                from app.models.models import PosterEvaluation
+                                norm = poster_evaluator.normalize(raw)
+                                ev = PosterEvaluation(poster_id=poster_obj.id, **norm)
+                                bg_db.add(ev)
+                                await bg_db.flush()
+                                log.info("pipeline_evaluate_done poster_id=%s", poster_obj.id)
+                        except Exception as exc:
+                            log.error("pipeline_evaluate_failed: %s", exc, exc_info=True)
 
-            c.status = "posted" if "post" in steps else "ready"
-            await bg_db.commit()
+                # ── Ad Copy ───────────────────────────────────────────────
+                if "adcopy" in steps:
+                    # Idempotency: skip if ad copies already exist
+                    existing_copies = (await bg_db.execute(
+                        select(AdCopy).where(AdCopy.campaign_id == campaign_id).limit(1)
+                    )).scalars().all()
+
+                    if existing_copies:
+                        log.info("pipeline_skip_adcopy campaign_id=%s already has copies", campaign_id)
+                    else:
+                        try:
+                            platforms = (
+                                [c.preferred_platform]
+                                if c.preferred_platform != "all"
+                                else ["instagram", "facebook", "linkedin", "twitter"]
+                            )
+                            copies = await ad_copy_generator.generate(
+                                c.product_name, c.description, c.offer,
+                                c.target_audience, c.campaign_goal,
+                                platforms=platforms,
+                            )
+                            for platform, data in copies.items():
+                                ad = AdCopy(
+                                    campaign_id=c.id,
+                                    platform=platform,
+                                    headline=data.get("headline"),
+                                    body=data.get("body", ""),
+                                    cta_variants=data.get("cta_variants"),
+                                    hashtags=data.get("hashtags"),
+                                )
+                                bg_db.add(ad)
+                            await bg_db.flush()
+                            log.info("pipeline_adcopy_done count=%d", len(copies))
+                        except Exception as exc:
+                            log.error("pipeline_adcopy_failed: %s", exc, exc_info=True)
+
+                # ── Optimize ──────────────────────────────────────────────
+                if "optimize" in steps:
+                    try:
+                        opt = await campaign_optimizer.optimize(
+                            campaign_goal=c.campaign_goal,
+                            target_audience=c.target_audience,
+                            budget=c.budget,
+                        )
+                        results["optimization"] = opt
+                        log.info("pipeline_optimize_done platform=%s", opt.get("recommended_platform"))
+                    except Exception as exc:
+                        log.error("pipeline_optimize_failed: %s", exc, exc_info=True)
+
+                # ── Post ──────────────────────────────────────────────────
+                if "post" in steps:
+                    try:
+                        target_platform = (
+                            results.get("optimization", {}).get("recommended_platform")
+                            or c.preferred_platform
+                        )
+                        sp = SocialPost(campaign_id=c.id, platform=target_platform, status="pending")
+                        bg_db.add(sp)
+                        await bg_db.flush()
+                        await bg_db.refresh(sp)
+
+                        text_content = f"{c.product_name} — {c.offer}"
+                        image_url = None
+                        if results.get("poster_id"):
+                            poster_obj = await bg_db.get(Poster, results["poster_id"])
+                            image_url = poster_obj.image_url if poster_obj else None
+
+                        await social_posting_service.publish(bg_db, sp, text_content, image_url)
+                        log.info("pipeline_post_done platform=%s", target_platform)
+                    except Exception as exc:
+                        log.error("pipeline_post_failed: %s", exc, exc_info=True)
+
+                # ── Finalise ──────────────────────────────────────────────
+                c.status = "posted" if "post" in steps else "ready"
+                await bg_db.commit()
+                log.info("pipeline_complete campaign_id=%s status=%s", campaign_id, c.status)
+
+            except Exception as exc:
+                log.error("pipeline_unhandled_error campaign_id=%s: %s", campaign_id, exc, exc_info=True)
+                await bg_db.rollback()
+                # Mark campaign as failed so the UI can reflect it
+                async with AsyncSessionLocal() as err_db:
+                    await err_db.execute(text("PRAGMA busy_timeout=5000"))
+                    failed_c = await err_db.get(Campaign, campaign_id)
+                    if failed_c:
+                        failed_c.status = "failed"
+                        await err_db.commit()
 
     background_tasks.add_task(run_pipeline, payload.campaign_id, payload.steps)
     return N8nWebhookResponse(
@@ -119,7 +204,6 @@ async def n8n_campaign_status(campaign_id: str, db: AsyncSession = Depends(get_d
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
-    from sqlalchemy import select
     posts_r = await db.execute(
         select(SocialPost).where(SocialPost.campaign_id == campaign_id)
     )
