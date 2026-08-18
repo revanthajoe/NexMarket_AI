@@ -1,0 +1,1 @@
+Marketing image for {product_name}, {concept}, main subject: {subject}, setting: {env}, mood: {mood}, style: {style}, {comp}, {colors} palette, {lighting}, theme: {goal_visual_hint}, brand style: {brand_style}, professional marketing photography, high quality, sharp focus

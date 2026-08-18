@@ -257,11 +257,35 @@ Return ONLY this JSON structure:
                 lighting  = spec.get("lighting", "")
                 avoid     = spec.get("avoid_elements", [])
 
-                sdxl_prompt = (
-                    f"{concept}, {subject}, {env}, {mood}, "
-                    f"{style}, {comp}, {colors} palette, {lighting}, "
-                    f"professional marketing photography, high quality, sharp focus"
-                )
+                template_path = Path(__file__).parent / "sdxl_prompt_template.md"
+                if template_path.exists():
+                    sdxl_template = template_path.read_text(encoding="utf-8").strip()
+                else:
+                    sdxl_template = (
+                        "Marketing image for {product_name}, {concept}, main subject: {subject}, setting: {env}, mood: {mood}, "
+                        "style: {style}, {comp}, {colors} palette, {lighting}, "
+                        "theme: {goal_visual_hint}, brand style: {brand_style}, "
+                        "professional marketing photography, high quality, sharp focus"
+                    )
+
+                try:
+                    sdxl_prompt = sdxl_template.format(
+                        product_name=product_name,
+                        concept=concept,
+                        subject=subject,
+                        env=env,
+                        mood=mood,
+                        style=style,
+                        comp=comp,
+                        colors=colors,
+                        lighting=lighting,
+                        goal_visual_hint=goal_visual_hint,
+                        brand_style=brand_style
+                    )
+                except KeyError as e:
+                    logger.error("Missing key in SDXL prompt template: %s", e)
+                    sdxl_prompt = f"Marketing image for {product_name}, {concept}, professional marketing photography"
+
                 sdxl_prompt = " ".join(sdxl_prompt.split())  # collapse whitespace
                 sdxl_prompt = sdxl_prompt[:380]              # hard cap
 
