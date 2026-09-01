@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 _SPEC      = get_spec("sdxl")
 _UPLOAD    = Path(settings.POSTER_UPLOAD_DIR)
-_STEPS     = 15          # inference steps — good quality / speed trade-off
+_STEPS     = settings.SDXL_INFERENCE_STEPS   # inference steps — higher = more detail/consistency
 _GUIDANCE  = 7.5         # classifier-free guidance scale
 
 
@@ -64,18 +64,11 @@ class SDXLService(BaseModelService):
             variant          = "fp16" if dtype == torch.float16 else None,
         )
 
-        # Try loading from local cache first (no network call, instant).
-        # Only attempt a network download if the model isn't cached at all.
-        try:
-            pipe = StableDiffusionXLPipeline.from_pretrained(
-                _SPEC.model_id, local_files_only=True, **load_kwargs,
-            )
-            logger.info("sdxl loaded from local cache")
-        except (OSError, EnvironmentError):
-            logger.warning("sdxl not in local cache — downloading from Hub (this is a one-time operation)")
-            pipe = StableDiffusionXLPipeline.from_pretrained(
-                _SPEC.model_id, local_files_only=False, **load_kwargs,
-            )
+        # Reuse the already-cached model. Network downloads are intentionally disabled.
+        pipe = StableDiffusionXLPipeline.from_pretrained(
+            _SPEC.model_id, local_files_only=True, **load_kwargs,
+        )
+        logger.info("sdxl loaded from local cache")
 
         # ── Memory optimisations ──────────────────────────────────────────────
         if device_manager.info.has_cuda:
@@ -124,9 +117,14 @@ class SDXLService(BaseModelService):
         negative_prompt: Optional[str] = None,
         width: int = 768,
         height: int = 768,
+        seed: Optional[int] = None,
     ) -> dict:
         """
         Generate one poster image.
+
+        `seed` pins the diffusion RNG so the same (prompt, seed) pair always
+        reproduces the same image. If omitted, a random seed is drawn and
+        returned in the result so the caller can persist it for reproducibility.
 
         Returns:
             {
@@ -134,6 +132,7 @@ class SDXLService(BaseModelService):
               "prompt_used":    "<prompt>",
               "provider":       "local-sdxl",
               "variation_index": <int>,
+              "seed":           <int>,
             }
         """
         if negative_prompt is None:
@@ -142,13 +141,21 @@ class SDXLService(BaseModelService):
                 "deformed, ugly, bad anatomy, worst quality"
             )
 
-        logger.info("sdxl generating variation=%d", variation)
+        if seed is None:
+            seed = torch.seed() % (2 ** 32)
+
+        logger.info("sdxl generating variation=%d seed=%d", variation, seed)
         memory_manager.log_vram("before_sdxl_inference")
 
         # Clamp to SDXL-friendly multiples of 8
         safe_w = max(512, (width  // 8) * 8)
         safe_h = max(512, (height // 8) * 8)
         logger.info("sdxl generating %dx%d variation=%d", safe_w, safe_h, variation)
+
+        # With enable_model_cpu_offload, latents are initialised before layers are
+        # streamed to GPU, so a CPU generator avoids device-mismatch errors.
+        generator_device = "cpu" if device_manager.info.has_cuda else device_manager.device
+        generator = torch.Generator(device=generator_device).manual_seed(int(seed))
 
         with torch.no_grad():
             result = self._pipeline(
@@ -159,6 +166,7 @@ class SDXLService(BaseModelService):
                 num_images_per_prompt = 1,
                 width                 = safe_w,
                 height                = safe_h,
+                generator             = generator,
             )
 
         image   = result.images[0]
@@ -168,7 +176,7 @@ class SDXLService(BaseModelService):
         image.save(fpath, format="PNG")
 
         url = f"{settings.STATIC_BASE_URL}/posters/{fname}"
-        logger.info("sdxl saved path=%s url=%s", fpath, url)
+        logger.info("sdxl saved path=%s url=%s seed=%d", fpath, url, seed)
         memory_manager.log_vram("after_sdxl_inference")
 
         return {
@@ -176,4 +184,5 @@ class SDXLService(BaseModelService):
             "prompt_used":     prompt,
             "provider":        "local-sdxl",
             "variation_index": variation,
+            "seed":            int(seed),
         }

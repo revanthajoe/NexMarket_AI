@@ -74,8 +74,15 @@ async def n8n_trigger_campaign(
                     else:
                         try:
                             gen = await poster_generator.generate(
-                                c.product_name, c.offer, c.target_audience,
-                                c.campaign_goal, c.brand_style
+                                campaign_name=c.name,
+                                product_name=c.product_name,
+                                description=c.description,
+                                offer=c.offer,
+                                target_audience=c.target_audience,
+                                campaign_goal=c.campaign_goal,
+                                brand_style=c.brand_style,
+                                platform=c.preferred_platform or "instagram",
+                                campaign_id=c.id,
                             )
                             poster = Poster(campaign_id=c.id, **gen)
                             bg_db.add(poster)
@@ -85,6 +92,7 @@ async def n8n_trigger_campaign(
                             log.info("pipeline_poster_done id=%s", poster.id)
                         except Exception as exc:
                             log.error("pipeline_poster_failed: %s", exc, exc_info=True)
+                            raise
 
                     # ── Evaluate ─────────────────────────────────────────
                     if "evaluate" in steps and results.get("poster_id"):
@@ -136,6 +144,7 @@ async def n8n_trigger_campaign(
                             log.info("pipeline_adcopy_done count=%d", len(copies))
                         except Exception as exc:
                             log.error("pipeline_adcopy_failed: %s", exc, exc_info=True)
+                            raise
 
                 # ── Optimize ──────────────────────────────────────────────
                 if "optimize" in steps:
@@ -149,6 +158,7 @@ async def n8n_trigger_campaign(
                         log.info("pipeline_optimize_done platform=%s", opt.get("recommended_platform"))
                     except Exception as exc:
                         log.error("pipeline_optimize_failed: %s", exc, exc_info=True)
+                        raise
 
                 # ── Post ──────────────────────────────────────────────────
                 if "post" in steps:
@@ -172,6 +182,7 @@ async def n8n_trigger_campaign(
                         log.info("pipeline_post_done platform=%s", target_platform)
                     except Exception as exc:
                         log.error("pipeline_post_failed: %s", exc, exc_info=True)
+                        raise
 
                 # ── Finalise ──────────────────────────────────────────────
                 c.status = "posted" if "post" in steps else "ready"

@@ -47,6 +47,11 @@ async def publish_post(
         # Schedule: mark as scheduled, worker picks it up
         await social_posting_service.schedule(db, social_post)
     else:
+        # Commit now so the row is visible to the background task's own DB
+        # session — BackgroundTasks can run before get_db()'s post-yield
+        # commit, otherwise bg_db.get(SocialPost, ...) races and returns None.
+        await db.commit()
+        await db.refresh(social_post)
         # Post immediately in background (non-blocking response)
         async def do_post():
             from app.db.session import AsyncSessionLocal

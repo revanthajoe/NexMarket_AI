@@ -51,10 +51,10 @@ REGISTRY: Dict[str, ModelSpec] = {
         model_id     = "Qwen/Qwen2.5-VL-3B-Instruct",
         priority     = 2,
         model_type   = "vision_lm",
-        use_4bit     = True,
+        use_4bit     = False,
         trust_remote = True,
         flash_attn   = True,
-        description  = "Qwen2.5-VL-3B-Instruct — 4-bit NF4, poster evaluation",
+        description  = "Qwen2.5-VL-3B-Instruct — cached Torch inference, poster evaluation",
     ),
 
     # ── Advertisement Generation (Qwen2.5) ───────────────────── priority 3 ──
@@ -62,10 +62,10 @@ REGISTRY: Dict[str, ModelSpec] = {
         model_id     = "Qwen/Qwen2.5-3B-Instruct",
         priority     = 3,
         model_type   = "causal_lm",
-        use_4bit     = True,
+        use_4bit     = False,
         trust_remote = True,
         flash_attn   = True,
-        description  = "Qwen2.5-3B-Instruct — 4-bit NF4, ad copy generation",
+        description  = "Qwen2.5-3B-Instruct — cached Torch inference, ad copy generation",
     ),
 
     # ── Sentiment Analysis (DistilBERT) ───────────────────────── priority 4 ──

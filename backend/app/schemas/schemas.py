@@ -58,6 +58,10 @@ class PosterGenerateRequest(BaseModel):
     campaign_id: str
     variations: int = Field(1, ge=1, le=4)
     style_override: Optional[str] = None
+    seed: Optional[int] = Field(
+        None,
+        description="Pin the SDXL seed to exactly reproduce a prior poster. Omit for a fresh deterministic-per-variation seed.",
+    )
 
 
 class PosterRead(BaseModel):

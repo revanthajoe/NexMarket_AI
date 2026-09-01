@@ -23,6 +23,7 @@ Improvements vs previous version:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -98,6 +99,19 @@ _VARIATION_STYLES = [
 ]
 
 
+def _derive_seed(campaign_id: Optional[str], variation: int, attempt: int = 1) -> int:
+    """
+    Deterministic SDXL seed from (campaign_id, variation, attempt).
+
+    Same campaign + variation + attempt always reproduces the same image;
+    different variations/attempts still get distinct seeds. Falls back to a
+    random component when no campaign_id is available (e.g. ad-hoc previews).
+    """
+    key = f"{campaign_id or uuid.uuid4().hex}:{variation}:{attempt}"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return int(digest[:8], 16)
+
+
 class PosterGeneratorService:
 
     async def generate(
@@ -112,6 +126,7 @@ class PosterGeneratorService:
         variation:       int = 0,
         platform:        str = "instagram",
         campaign_id:     Optional[str] = None,
+        seed:            Optional[int] = None,
     ) -> dict:
         logger.info("poster_generate variation=%d provider=%s platform=%s", variation, settings.IMAGE_PROVIDER, platform)
 
@@ -119,7 +134,7 @@ class PosterGeneratorService:
             return await self._generate_local(
                 campaign_name, product_name, description, offer,
                 target_audience, campaign_goal, brand_style or "",
-                variation, platform, campaign_id,
+                variation, platform, campaign_id, seed,
             )
         elif settings.IMAGE_PROVIDER == "openai":
             return await self._generate_openai("A placeholder prompt", product_name, variation)
@@ -140,6 +155,7 @@ class PosterGeneratorService:
         variation:       int,
         platform:        str,
         campaign_id:     Optional[str],
+        seed:            Optional[int] = None,
     ) -> dict:
         try:
             from ai.inference_manager import inference_manager
@@ -301,6 +317,10 @@ Return ONLY this JSON structure:
                 logger.info("poster_sdxl_prompt (len=%d): %s", len(sdxl_prompt), sdxl_prompt[:120])
 
                 # Step 3 — SDXL image generation (platform aspect ratio)
+                # Same seed base is reused across retry attempts (offset by attempt)
+                # so a regeneration with an explicit seed is fully reproducible, while
+                # different attempts/variations still get visually distinct results.
+                attempt_seed = (seed if seed is not None else _derive_seed(campaign_id, variation)) + (attempt - 1)
                 result = await inference_manager.generate_poster(
                     prompt=sdxl_prompt,
                     product_name=product_name,
@@ -308,8 +328,10 @@ Return ONLY this JSON structure:
                     negative_prompt=neg_prompt,
                     width=fmt.sdxl_width,
                     height=fmt.sdxl_height,
+                    seed=attempt_seed,
                 )
                 visual_url  = result.get("image_url", "")
+                resolved_seed = result.get("seed", attempt_seed)
                 visual_fname = visual_url.split("/")[-1]
                 visual_path  = _UPLOAD / visual_fname
 
@@ -359,6 +381,7 @@ Return ONLY this JSON structure:
                         "platform":     platform,
                         "format":       f"{fmt.width}x{fmt.height}",
                         "language":     language,
+                        "seed":         resolved_seed,
                     },
                 }
 
@@ -384,7 +407,13 @@ Return ONLY this JSON structure:
 
     async def _generate_openai(self, prompt: str, product_name: str, variation: int) -> dict:
         import httpx
-        from openai import OpenAI
+        try:
+            from openai import OpenAI
+        except ImportError as exc:
+            raise RuntimeError(
+                "IMAGE_PROVIDER=openai requires the 'openai' package. "
+                "Install it with: pip install openai"
+            ) from exc
 
         if not settings.OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY required for IMAGE_PROVIDER=openai")

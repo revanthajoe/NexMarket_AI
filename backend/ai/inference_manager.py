@@ -42,12 +42,13 @@ class InferenceManager:
         negative_prompt: Optional[str] = None,
         width: int = 768,
         height: int = 768,
+        seed: Optional[int] = None,
     ) -> dict:
         """Generate one marketing poster image with SDXL."""
         async with model_manager.session("sdxl") as svc:
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(
-                None, lambda: svc.generate(prompt, product_name, variation, negative_prompt, width, height)
+                None, lambda: svc.generate(prompt, product_name, variation, negative_prompt, width, height, seed)
             )
 
     # ─────────────────────────────────────────────────────────────────────────

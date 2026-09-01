@@ -68,11 +68,13 @@ class QwenVLService(BaseModelService):
         self._processor = AutoProcessor.from_pretrained(
             _SPEC.model_id,
             trust_remote_code = _SPEC.trust_remote,
+            local_files_only    = True,
         )
 
         load_kwargs: dict = dict(
             trust_remote_code   = _SPEC.trust_remote,
             attn_implementation = attn_impl,
+            local_files_only    = True,
         )
         if bnb_config:
             load_kwargs["quantization_config"] = bnb_config

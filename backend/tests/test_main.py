@@ -108,10 +108,12 @@ async def test_lead_prediction(client):
     assert 0 <= data["purchase_probability"] <= 1
 
 
-# ── Mock Poster Generation ────────────────────────────────────────────────────
+# ── Poster Generation ────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_poster_generation(client):
+    """Provider depends on IMAGE_PROVIDER (.env): 'mock', or 'local-sdxl-composed'
+    when the real local SDXL/Qwen pipeline is configured — don't hardcode one."""
     cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
     cid = cr.json()["id"]
 
@@ -123,7 +125,7 @@ async def test_poster_generation(client):
     posters = r.json()
     assert len(posters) == 1
     assert "image_url" in posters[0]
-    assert posters[0]["provider"] == "mock"
+    assert posters[0]["provider"] in ("mock", "local-sdxl-composed", "openai-dalle3")
 
 
 # ── Optimization ──────────────────────────────────────────────────────────────
@@ -152,3 +154,73 @@ async def test_dashboard(client):
     data = r.json()
     assert "total_campaigns" in data
     assert "total_posts" in data
+
+
+# ── Campaign Report (Workflow D) ────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_campaign_report(client):
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+
+    r = await client.get(f"/api/v1/analytics/{cid}/report")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["campaign"]["id"] == cid
+    assert "creative" in data
+    assert "publishing" in data
+    assert "analytics_totals" in data
+    assert "sentiment" in data
+    assert "leads" in data
+
+
+@pytest.mark.asyncio
+async def test_campaign_report_missing_campaign(client):
+    r = await client.get("/api/v1/analytics/does-not-exist/report")
+    assert r.status_code == 404
+
+
+# ── Social Posting (mock adapter) ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_social_posting_mock_publish(client):
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+
+    r = await client.post(
+        "/api/v1/posting/publish",
+        json={"campaign_id": cid, "platform": "instagram"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["campaign_id"] == cid
+    assert data["platform"] == "instagram"
+    assert data["status"] in ("pending", "posting", "scheduled")
+
+
+@pytest.mark.asyncio
+async def test_platform_health(client):
+    r = await client.get("/api/v1/posting/health/platforms")
+    assert r.status_code == 200
+
+
+# ── SDXL seed determinism (pure unit test, no model load) ──────────────────────
+
+def test_poster_seed_is_deterministic():
+    """Same (campaign_id, variation, attempt) must always yield the same seed,
+    and different variations/attempts must diverge — this is the fix for the
+    'poster generation produces different images' issue."""
+    from app.services.ai.poster_generator import _derive_seed
+
+    s1 = _derive_seed("campaign-123", variation=0, attempt=1)
+    s2 = _derive_seed("campaign-123", variation=0, attempt=1)
+    assert s1 == s2, "identical inputs must produce identical seeds"
+
+    s_other_variation = _derive_seed("campaign-123", variation=1, attempt=1)
+    assert s_other_variation != s1, "different variations should get different seeds"
+
+    s_other_attempt = _derive_seed("campaign-123", variation=0, attempt=2)
+    assert s_other_attempt != s1, "different attempts should get different seeds"
+
+    s_other_campaign = _derive_seed("campaign-456", variation=0, attempt=1)
+    assert s_other_campaign != s1, "different campaigns should get different seeds"

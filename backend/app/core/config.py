@@ -14,7 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=Path(__file__).resolve().parents[2] / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -99,9 +99,10 @@ class Settings(BaseSettings):
     STORAGE_BACKEND: Literal["local", "s3"] = "local"
     POSTER_UPLOAD_DIR: str = "./assets/posters"
     STATIC_BASE_URL: str = "http://localhost:8000/static"
+    SDXL_INFERENCE_STEPS: int = 28
 
     # ── ML ────────────────────────────────────────────────────────
-    LSTM_MODEL_PATH: str = "./ml/lstm/engagement_lstm.h5"
+    LSTM_MODEL_PATH: str = "./ml/lstm/engagement_lstm.pt"
     XGBOOST_MODEL_PATH: str = "./ml/xgboost_model/lead_model.json"
     SENTIMENT_MODEL: str = "distilbert-base-uncased-finetuned-sst-2-english"
 

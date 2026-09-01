@@ -39,7 +39,7 @@ Submit a product → NexMarket AI automatically:
 │  └──────────────┘  └───────────────┘  └──────────────────────┘ │
 │  ┌──────────────┐  ┌───────────────┐  ┌──────────────────────┐ │
 │  │ Sentiment    │  │ Lead Scoring  │  │ LSTM Forecasting     │ │
-│  │ DistilBERT   │  │ XGBoost       │  │ TensorFlow/Keras     │ │
+│  │ DistilBERT   │  │ XGBoost       │  │ PyTorch LSTM         │ │
 │  └──────────────┘  └───────────────┘  └──────────────────────┘ │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │ Social Posting Service                                    │   │
@@ -72,7 +72,7 @@ Submit a product → NexMarket AI automatically:
 | Vision      | Qwen2.5-VL (local) / GPT-4o Vision                |
 | Sentiment   | DistilBERT (HuggingFace Transformers)             |
 | Lead ML     | XGBoost (trained on synthetic data)               |
-| Forecasting | LSTM (TensorFlow/Keras — NO GRU)                  |
+| Forecasting | LSTM (pure PyTorch — NO GRU, NO TensorFlow)        |
 | Optimization| Thompson Sampling Contextual Bandit               |
 | Social Post | Meta Graph API / LinkedIn API / Tweepy / Mock     |
 
@@ -303,7 +303,7 @@ poster generation (mock), campaign optimization.
 | Poster Evaluator | Qwen2.5-VL (local)         | Mock scores                 |
 | Sentiment        | DistilBERT                 | Keyword rules               |
 | Lead Prediction  | XGBoost (synthetic train)  | Heuristic formula           |
-| Forecasting      | LSTM (Keras, synthetic)    | Linear trend extrapolation  |
+| Forecasting      | LSTM (PyTorch, synthetic)  | Linear trend extrapolation  |
 | Optimization     | Thompson Sampling Bandit   | Static platform priors      |
 | Social Posting   | Meta/LinkedIn/Twitter APIs | Mock adapter                |
 | Orchestration    | n8n + FastAPI webhooks     | Direct API calls            |

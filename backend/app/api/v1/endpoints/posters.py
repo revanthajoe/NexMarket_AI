@@ -53,6 +53,7 @@ async def generate_posters(
                 variation=i,
                 platform=campaign.preferred_platform or "instagram",
                 campaign_id=campaign.id,
+                seed=(payload.seed + i) if payload.seed is not None else None,
             )
         except Exception as exc:
             logger.error(
