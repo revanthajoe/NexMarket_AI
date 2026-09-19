@@ -37,3 +37,36 @@ build/
 *.egg-info/
 __pycache__/
 *.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+coverage/
+
+# ─── SDXL (local-only backend) ──────────────────────────────────────────────
+# IMAGE_PROVIDER=gemini is the active poster backend. The SDXL path is kept on
+# disk and still works (IMAGE_PROVIDER=local), but is not tracked in git.
+# Consequence: a fresh clone has no sdxl_service.py — the four SDXL chunking
+# tests skip themselves (see tests/test_main.py), and IMAGE_PROVIDER=local
+# will not run there until the file is restored.
+backend/ai/diffusion/
+backend/app/services/ai/sdxl_prompt_template.md
+
+# ─── Local datasets, model weights & generated assets ───────────────────────
+data/poster_train/
+backend/assets/brand_kits/*
+backend/ml/lora/
+*.safetensors
+*.onnx
+*.ckpt
+*.pt
+*.pth
+
+# ─── Notebook and build metadata ────────────────────────────────────────────
+*.tsbuildinfo
+
+# ─── Local visual comparison artifacts ──────────────────────────────────────
+compare_before.png
+compare_after.png
+
+/data

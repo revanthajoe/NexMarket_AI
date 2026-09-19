@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { api, Campaign } from "@/lib/api";
 import { Loader2, Megaphone, Plus, ExternalLink } from "lucide-react";
@@ -15,13 +15,22 @@ const STATUS_BADGE: Record<string, string> = {
   archived:   "text-slate-600 bg-slate-800 border border-slate-700",
 };
 
+const PAGE_SIZE = 20;
+
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(0);
 
   useEffect(() => {
     api.campaigns.list().then(setCampaigns).finally(() => setLoading(false));
   }, []);
+
+  const pageCount = Math.max(1, Math.ceil(campaigns.length / PAGE_SIZE));
+  const visible = useMemo(
+    () => campaigns.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE),
+    [campaigns, page],
+  );
 
   return (
     <div className="space-y-6">
@@ -52,7 +61,7 @@ export default function CampaignsPage() {
         </div>
       ) : (
         <div className="grid gap-4">
-          {campaigns.map((c, i) => (
+          {visible.map((c, i) => (
             <div key={c.id}
               className="glass-dynamic rounded-xl p-5 animate-fade-in-up group cursor-pointer"
               style={{ animationDelay: `${i * 50}ms` }}>
@@ -83,6 +92,28 @@ export default function CampaignsPage() {
               </div>
             </div>
           ))}
+
+          {pageCount > 1 && (
+            <div className="flex items-center justify-center gap-4 pt-2">
+              <button
+                onClick={() => setPage(p => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="px-3 py-1.5 rounded-lg text-xs border border-surface-border text-slate-400 hover:text-slate-200 hover:bg-surface-muted disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <span className="text-xs text-slate-500">
+                Page {page + 1} of {pageCount} · {campaigns.length} campaigns
+              </span>
+              <button
+                onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))}
+                disabled={page >= pageCount - 1}
+                className="px-3 py-1.5 rounded-lg text-xs border border-surface-border text-slate-400 hover:text-slate-200 hover:bg-surface-muted disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

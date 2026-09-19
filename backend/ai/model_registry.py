@@ -51,7 +51,10 @@ REGISTRY: Dict[str, ModelSpec] = {
         model_id     = "Qwen/Qwen2.5-VL-3B-Instruct",
         priority     = 2,
         model_type   = "vision_lm",
-        use_4bit     = False,
+        # fp16 is ~7GB and does not fit the 6GB card: accelerate then offloads
+        # layers to CPU, where torch has no fp16 kernels ("compute_columns3d"
+        # not implemented for 'Half'). NF4 is ~2.3GB and stays fully on GPU.
+        use_4bit     = True,
         trust_remote = True,
         flash_attn   = True,
         description  = "Qwen2.5-VL-3B-Instruct — cached Torch inference, poster evaluation",
@@ -62,7 +65,10 @@ REGISTRY: Dict[str, ModelSpec] = {
         model_id     = "Qwen/Qwen2.5-3B-Instruct",
         priority     = 3,
         model_type   = "causal_lm",
-        use_4bit     = False,
+        # Same reason as qwen_vl: fp16 is ~6.2GB on a 6GB card, so it partially
+        # offloads to CPU and dies with "addmm_impl_cpu_" not implemented for
+        # 'Half'. NF4 is ~2.0GB and stays fully on GPU.
+        use_4bit     = True,
         trust_remote = True,
         flash_attn   = True,
         description  = "Qwen2.5-3B-Instruct — cached Torch inference, ad copy generation",

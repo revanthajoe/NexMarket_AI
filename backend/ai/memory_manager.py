@@ -23,19 +23,19 @@ logger = logging.getLogger(__name__)
 
 def purge(*objects: Any) -> None:
     """
-    Delete provided object references, empty CUDA cache, and run GC.
-    Call this immediately after every model inference.
-    
-    Usage:
-        purge(model, tokenizer, processor)
-    """
-    # 1. Delete caller-provided references
-    for obj in objects:
-        try:
-            del obj
-        except Exception:
-            pass
+    Synchronise CUDA, empty the allocator cache, and run GC.
 
+    IMPORTANT: callers must drop their own references BEFORE calling this::
+
+        self._model     = None
+        self._tokenizer = None
+        memory_manager.purge()
+
+    Passing objects in does NOT free them — a function cannot delete its
+    caller's attribute, and holding them as arguments here actively keeps them
+    alive across the empty_cache()/gc.collect() below. `*objects` is accepted
+    only for backwards compatibility and is deliberately ignored.
+    """
     # 2. Move CUDA to synchronise all pending kernels first
     if device_manager.info.has_cuda:
         try:

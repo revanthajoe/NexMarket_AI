@@ -144,3 +144,25 @@ class DeviceManager:
 
 # Module-level singleton
 device_manager = DeviceManager.get()
+
+
+def model_input_device(model) -> torch.device:
+    """
+    Device that `model`'s inputs must be placed on.
+
+    Models loaded with device_map="auto" are placed by accelerate, which may
+    split them across GPU/CPU or offload them entirely to CPU/disk when VRAM is
+    tight. In those cases the global device_manager.device ("cuda") is wrong and
+    passing inputs there raises:
+
+        RuntimeError: Expected all tensors to be on the same device
+
+    Prefer the model's own reported device, skipping `meta` (offloaded) params.
+    """
+    dev = getattr(model, "device", None)
+    if isinstance(dev, torch.device) and dev.type != "meta":
+        return dev
+    for p in model.parameters():
+        if p.device.type != "meta":
+            return p.device
+    return torch.device("cpu")

@@ -55,17 +55,26 @@ class Campaign(Base):
         DateTime, server_default=func.now(), onupdate=func.now()
     )
 
-    # Relationships
-    posters: Mapped[list["Poster"]] = relationship(back_populates="campaign")
-    ad_copies: Mapped[list["AdCopy"]] = relationship(back_populates="campaign")
-    social_posts: Mapped[list["SocialPost"]] = relationship(back_populates="campaign")
-    analytics: Mapped[list["AnalyticsEvent"]] = relationship(back_populates="campaign")
-    lead_scores: Mapped[list["LeadScore"]] = relationship(back_populates="campaign")
+    # Relationships. `passive_deletes=True` on every one of these: each child's
+    # FK is declared `ondelete="CASCADE"` (see e.g. Poster.campaign_id below),
+    # but without this flag SQLAlchemy's ORM manages the delete itself first —
+    # by default it tries to UPDATE each child's FK to NULL before the parent
+    # DELETE, which fails outright with a NOT NULL constraint error on every
+    # one of these (all are non-nullable). Confirmed live: turning on
+    # `PRAGMA foreign_keys` (session.py) without this made `db.delete(campaign)`
+    # raise IntegrityError instead of the silent-orphan behavior it replaced —
+    # worse, not better. `passive_deletes=True` tells the ORM to leave deletion
+    # of these children entirely to the database's own ON DELETE CASCADE.
+    posters: Mapped[list["Poster"]] = relationship(back_populates="campaign", passive_deletes=True)
+    ad_copies: Mapped[list["AdCopy"]] = relationship(back_populates="campaign", passive_deletes=True)
+    social_posts: Mapped[list["SocialPost"]] = relationship(back_populates="campaign", passive_deletes=True)
+    analytics: Mapped[list["AnalyticsEvent"]] = relationship(back_populates="campaign", passive_deletes=True)
+    lead_scores: Mapped[list["LeadScore"]] = relationship(back_populates="campaign", passive_deletes=True)
     forecasts: Mapped[list["EngagementForecast"]] = relationship(
-        back_populates="campaign"
+        back_populates="campaign", passive_deletes=True
     )
     optimizations: Mapped[list["OptimizationResult"]] = relationship(
-        back_populates="campaign"
+        back_populates="campaign", passive_deletes=True
     )
 
 
@@ -87,8 +96,10 @@ class Poster(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     campaign: Mapped["Campaign"] = relationship(back_populates="posters")
+    # passive_deletes=True: poster_evaluations.poster_id is ondelete="CASCADE"
+    # and non-nullable — same reasoning as the Campaign relationships above.
     evaluations: Mapped[list["PosterEvaluation"]] = relationship(
-        back_populates="poster"
+        back_populates="poster", passive_deletes=True
     )
 
 
@@ -129,12 +140,18 @@ class AdCopy(Base):
         ForeignKey("campaigns.id", ondelete="CASCADE")
     )
     platform: Mapped[str] = mapped_column(String(100), nullable=False)
-    # instagram | facebook | linkedin | email | twitter
+    # instagram | facebook | telegram | whatsapp | email
     headline: Mapped[Optional[str]] = mapped_column(String(500))
     body: Mapped[str] = mapped_column(Text, nullable=False)
     cta_variants: Mapped[Optional[list]] = mapped_column(JSON)
     hashtags: Mapped[Optional[list]] = mapped_column(JSON)
     tone: Mapped[Optional[str]] = mapped_column(String(100))
+    # True when Qwen's output failed to parse as JSON (twice — see
+    # ad_generator.py's retry) and this is the hardcoded English placeholder
+    # template instead of a real generation result. Same provenance-flag
+    # convention as analytics_events.is_mock: without it, a failed non-English
+    # request is indistinguishable from a real translated one.
+    fallback: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     campaign: Mapped["Campaign"] = relationship(back_populates="ad_copies")
@@ -179,7 +196,9 @@ class SocialPost(Base):
     )
 
     campaign: Mapped["Campaign"] = relationship(back_populates="social_posts")
-    logs: Mapped[list["PostLog"]] = relationship(back_populates="post")
+    # passive_deletes=True: post_logs.post_id is ondelete="CASCADE" and
+    # non-nullable — same reasoning as the Campaign relationships above.
+    logs: Mapped[list["PostLog"]] = relationship(back_populates="post", passive_deletes=True)
 
 
 class PostLog(Base):
@@ -218,6 +237,11 @@ class AnalyticsEvent(Base):
     reach: Mapped[int] = mapped_column(BigInteger, default=0)
     ctr: Mapped[float] = mapped_column(Float, default=0.0)
     spend: Mapped[float] = mapped_column(Float, default=0.0)
+    # True when the numbers came from the mock adapter rather than a platform
+    # API — the UI labels these so demo data is never read as measured results.
+    is_mock: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Set on every metrics sync so the UI can show how fresh the data is.
+    synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     campaign: Mapped["Campaign"] = relationship(back_populates="analytics")

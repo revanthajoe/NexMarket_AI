@@ -1,10 +1,16 @@
 """
 app/services/ai/poster_evaluator.py
 ─────────────────────────────────────
-Adapter: routes poster evaluation to InferenceManager → ModelManager → QwenVLService.
+Adapter: routes poster evaluation to Gemini, or to
+InferenceManager → ModelManager → QwenVLService when AI_TEXT_PROVIDER=local.
 
 Normalises the raw evaluation dict into the standard schema
 expected by the API endpoint and ORM model.
+
+Gemini is the default because the poster phase runs on it end to end, and
+because it scores honestly: on a poster with garbled Tamil it returned 25/100
+and named the specific mistranslations, where a vaguer score would have sailed
+past the 70 approval threshold and skipped the improvement retry entirely.
 """
 from __future__ import annotations
 
@@ -16,7 +22,7 @@ from app.prompts.templates import VISION_EVALUATION_SYSTEM_PROMPT, VISION_EVALUA
 
 logger = get_logger(__name__)
 
-_MOCK_EVALUATION = {
+_FALLBACK_EVALUATION = {
     "overall_score":      72.5,
     "dimensions": {
         "readability":   78,
@@ -30,32 +36,42 @@ _MOCK_EVALUATION = {
     "weaknesses":  ["Background texture competes with text"],
     "suggestions": ["Add whitespace around headline", "Use one accent color for CTA"],
     "verdict":     "good",
+    # Marks the score as synthetic. Without this a broken evaluator silently
+    # reports 72.5 — above the 70 approval threshold — so every poster reads as
+    # "approved on attempt 1" and the improvement retry never fires.
+    "fallback":    True,
 }
 
 
 class PosterEvaluatorService:
 
     async def evaluate(self, image_url: str, context: str = "") -> dict:
-        logger.info("poster_evaluate url=%s provider=%s", image_url, settings.VISION_PROVIDER)
-
-        if settings.VISION_PROVIDER == "mock":
-            return self.normalize(_MOCK_EVALUATION)
+        provider = settings.AI_TEXT_PROVIDER
+        logger.info("poster_evaluate url=%s provider=%s", image_url, provider)
 
         try:
-            from ai.inference_manager import inference_manager
-            from app.prompts.templates import VISION_EVALUATION_SYSTEM_PROMPT, build_vision_evaluation_prompt
-            user_prompt = build_vision_evaluation_prompt(context)
-            raw = await inference_manager.evaluate_poster(
-                image_url,
+            from app.prompts.templates import (
                 VISION_EVALUATION_SYSTEM_PROMPT,
-                user_prompt,
+                build_vision_evaluation_prompt,
             )
+            user_prompt = build_vision_evaluation_prompt(context)
+
+            if provider == "gemini":
+                from ai.llm.gemini_service import gemini_llm_service
+                raw = await gemini_llm_service.evaluate_image(
+                    image_url, VISION_EVALUATION_SYSTEM_PROMPT, user_prompt,
+                )
+            else:
+                from ai.inference_manager import inference_manager
+                raw = await inference_manager.evaluate_poster(
+                    image_url, VISION_EVALUATION_SYSTEM_PROMPT, user_prompt,
+                )
             if raw:
                 return self.normalize(raw)
         except Exception as exc:
             logger.warning("poster_evaluate_fallback error=%s", exc)
 
-        return self.normalize(_MOCK_EVALUATION)
+        return self.normalize(_FALLBACK_EVALUATION)
 
     def normalize(self, raw: dict) -> dict:
         """Flatten raw dict into the schema expected by the ORM."""
@@ -71,6 +87,7 @@ class PosterEvaluatorService:
             "strengths":           raw.get("strengths", []),
             "weaknesses":          raw.get("weaknesses", []),
             "suggestions":         raw.get("suggestions", []),
+            "fallback":            bool(raw.get("fallback", False)),
             "raw_response":        raw,
         }
 

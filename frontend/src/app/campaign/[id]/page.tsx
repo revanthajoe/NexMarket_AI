@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import toast from "react-hot-toast";
 import dynamic from "next/dynamic";
@@ -9,9 +9,11 @@ import {
   Target, Zap, RefreshCw, CheckCircle2,
 } from "lucide-react";
 import {
-  api, Campaign, Poster, PosterEvaluation, AdCopy,
+  api, invalidateCache, PIPELINE_STEPS, LANGUAGES,
+  Campaign, Poster, PosterEvaluation, AdCopy,
   SocialPost, Forecast, Optimization, BrandKitInfo,
 } from "@/lib/api";
+import { AdCopyTab, PostingTab } from "@/components/campaign/CampaignTabs";
 
 // Dynamic imports for heavy chart components — split from main bundle
 const PosterRadarChart = dynamic(
@@ -25,6 +27,35 @@ const ForecastLineChart = dynamic(
 
 type TabId = "overview" | "poster" | "adcopy" | "posting" | "forecast" | "optimize";
 
+const POLL_INTERVAL_MS = 3000;
+// Backstop only — the backend self-heals a stuck "generating" campaign after
+// 20 minutes (n8n_webhooks.STALE_GENERATING_TIMEOUT_SECONDS). This just makes
+// sure a client that's open the whole time doesn't poll forever if that ever
+// doesn't happen (e.g. the status call itself keeps erroring).
+const MAX_POLL_MS = 25 * 60 * 1000;
+
+const STATUS_BADGE_CLASSES: Record<string, string> = {
+  draft: "badge-pending", generating: "badge-pending", ready: "badge-mock",
+  posted: "badge-posted", failed: "badge-failed",
+};
+
+function StatusBadge({ status }: { status: string }) {
+  return (
+    <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${STATUS_BADGE_CLASSES[status] || "badge-pending"}`}>
+      {status}
+    </span>
+  );
+}
+
+const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
+  { id: "overview",  label: "Overview",  icon: Zap },
+  { id: "poster",    label: "Poster",    icon: ImageIcon },
+  { id: "adcopy",    label: "Ad Copy",   icon: Send },
+  { id: "posting",   label: "Posting",   icon: Send },
+  { id: "forecast",  label: "Forecast",  icon: TrendingUp },
+  { id: "optimize",  label: "Optimize",  icon: Target },
+];
+
 export default function CampaignDetailPage() {
   const { id } = useParams<{ id: string }>();
   const [campaign, setCampaign]       = useState<Campaign | null>(null);
@@ -37,8 +68,10 @@ export default function CampaignDetailPage() {
   const [tab, setTab]                 = useState<TabId>("overview");
   const [loading, setLoading]         = useState(true);
   const [actionLoading, setActionLoading] = useState("");
+  const [pipelineStatus, setPipelineStatus] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const [c, ps, ads, sps] = await Promise.all([
         api.campaigns.get(id),
@@ -52,13 +85,13 @@ export default function CampaignDetailPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [id]);
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => { load(); }, [load]);
 
   // Generic action runner — reloads page data after action EXCEPT for poster
   // generation which sets state directly to avoid re-triggering generation.
-  const runAction = async (action: string, fn: () => Promise<unknown>) => {
+  const runAction = useCallback(async (action: string, fn: () => Promise<unknown>) => {
     setActionLoading(action);
     try {
       await fn();
@@ -74,7 +107,65 @@ export default function CampaignDetailPage() {
     } finally {
       setActionLoading("");
     }
-  };
+  }, [load]);
+
+  // The pipeline trigger only *queues* work server-side, so success can't be
+  // reported from the trigger response — poll campaign status until it settles.
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => stopPolling, [stopPolling]);
+
+  const runPipeline = useCallback(async () => {
+    setActionLoading("Full Pipeline");
+    setPipelineStatus("generating");
+    try {
+      await api.n8n.trigger(id, PIPELINE_STEPS);
+    } catch (err: unknown) {
+      setActionLoading("");
+      setPipelineStatus(null);
+      toast.error(`Failed to start pipeline: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+
+    stopPolling();
+    const startedAt = Date.now();
+    pollRef.current = setInterval(async () => {
+      let snapshot;
+      try {
+        snapshot = await api.n8n.status(id);
+      } catch {
+        return; // transient — keep polling
+      }
+      setPipelineStatus(snapshot.status);
+      if (snapshot.status === "generating") {
+        if (Date.now() - startedAt > MAX_POLL_MS) {
+          stopPolling();
+          setActionLoading("");
+          setPipelineStatus(null);
+          toast.error("Still generating after 25 minutes — check the backend, then refresh.");
+        }
+        return;
+      }
+
+      stopPolling();
+      setActionLoading("");
+      setPipelineStatus(null);
+      // The pipeline wrote to the DB without any request from this client, so
+      // cached GETs from before it ran are stale.
+      invalidateCache();
+      await load();
+      if (snapshot.status === "failed") {
+        toast.error("Pipeline failed — check the backend logs.");
+      } else {
+        toast.success("Pipeline complete!");
+      }
+    }, POLL_INTERVAL_MS);
+  }, [id, load, stopPolling]);
 
   if (loading) return (
     <div className="flex items-center justify-center h-64">
@@ -82,27 +173,6 @@ export default function CampaignDetailPage() {
     </div>
   );
   if (!campaign) return <p className="text-slate-500">Campaign not found.</p>;
-
-  const StatusBadge = ({ status }: { status: string }) => {
-    const map: Record<string, string> = {
-      draft: "badge-pending", generating: "badge-pending", ready: "badge-mock",
-      posted: "badge-posted", failed: "badge-failed",
-    };
-    return (
-      <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${map[status] || "badge-pending"}`}>
-        {status}
-      </span>
-    );
-  };
-
-  const TABS: { id: TabId; label: string; icon: React.ElementType }[] = [
-    { id: "overview",  label: "Overview",  icon: Zap },
-    { id: "poster",    label: "Poster",    icon: ImageIcon },
-    { id: "adcopy",    label: "Ad Copy",   icon: Send },
-    { id: "posting",   label: "Posting",   icon: Send },
-    { id: "forecast",  label: "Forecast",  icon: TrendingUp },
-    { id: "optimize",  label: "Optimize",  icon: Target },
-  ];
 
   return (
     <div className="space-y-6">
@@ -117,14 +187,29 @@ export default function CampaignDetailPage() {
             <p className="text-sm text-slate-400">{campaign.product_name} · {campaign.campaign_goal} · {campaign.preferred_platform}</p>
           </div>
           <button
-            onClick={() => runAction("Full Pipeline", () => api.n8n.trigger(id))}
+            onClick={runPipeline}
             disabled={!!actionLoading}
             className="btn-brand px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2"
           >
             {actionLoading === "Full Pipeline" ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
-            Run Pipeline
+            {actionLoading === "Full Pipeline" ? "Running…" : "Run Pipeline"}
           </button>
         </div>
+
+        {pipelineStatus && (
+          <div className="mt-4 pt-4 border-t border-surface-border">
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <Loader2 size={12} className="animate-spin text-brand-400" />
+              <span>
+                Pipeline running — poster, ad copy, evaluation, forecast, optimization and posting.
+                This takes several minutes.
+              </span>
+            </div>
+            <div className="mt-2 h-1 bg-surface-muted rounded-full overflow-hidden">
+              <div className="h-full w-1/3 bg-gradient-to-r from-brand-500 to-brand-400 animate-pulse rounded-full" />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
@@ -150,8 +235,8 @@ export default function CampaignDetailPage() {
       {tab === "poster" && (
         <PosterTab
           posters={posters} eval_={eval_} campaignId={id}
-          onGenerate={() => runAction("Poster Generation", async () => {
-            const p = await api.posters.generate(id, 2);
+          onGenerate={(language: string) => runAction("Poster Generation", async () => {
+            const p = await api.posters.generate(id, 2, language);
             setPosters(p);
             if (p[0]) {
               try {
@@ -167,17 +252,20 @@ export default function CampaignDetailPage() {
       )}
       {tab === "adcopy" && (
         <AdCopyTab copies={copies} campaignId={id}
-          onGenerate={() => runAction("Ad Copy", async () => {
-            const c = await api.adcopy.generate(id, ["instagram","facebook","linkedin","twitter","email"]);
-            setCopies(c);
-          })}
+          onGenerate={(platforms: string[], tone: string, language: string) =>
+            runAction("Ad Copy", async () => {
+              const fresh = await api.adcopy.generate(id, platforms, tone, language);
+              // Regenerating a single platform must not wipe the other platforms'
+              // copy out of view — merge instead of replacing the whole list.
+              setCopies(prev => [...prev, ...fresh]);
+            })}
           loading={actionLoading === "Ad Copy"}
         />
       )}
       {tab === "posting" && (
         <PostingTab posts={posts} campaignId={id} copies={copies} posters={posters}
-          onPost={(platform, ad_copy_id, poster_id) =>
-            runAction("Post", () => api.posting.publish({ campaign_id: id, platform, ad_copy_id, poster_id }))
+          onPost={(platforms, ad_copy_id, poster_id) =>
+            runAction("Post", () => api.posting.publishCampaign(id, { platforms, ad_copy_id, poster_id }))
           }
           loading={actionLoading === "Post"}
         />
@@ -256,7 +344,7 @@ function OverviewTab({ campaign, copies, posts }: {
 
 function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
   posters: Poster[]; eval_: PosterEvaluation | null; campaignId: string;
-  onGenerate: () => void; loading: boolean;
+  onGenerate: (language: string) => void; loading: boolean;
 }) {
   const [lightbox, setLightbox]   = useState<string | null>(null);
   const [brandKit, setBrandKit]   = useState<BrandKitInfo | null>(null);
@@ -264,15 +352,30 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
   const [language, setLanguage]   = useState("en");
   const [brandColor, setBrandColor] = useState("");
   const [showKit, setShowKit]     = useState(false);
+  // Contact details. Supplying any of these plus a product cutout promotes the
+  // poster from the "designed" layout to the full "brochure" layout.
+  const [contact, setContact] = useState({
+    phone: "", website: "", address_en: "", address_ta: "",
+  });
 
-  const loadKit = async () => {
+  const loadKit = useCallback(async () => {
     try {
       const kit = await api.brandKit.get(campaignId);
       setBrandKit(kit);
       if (kit.language) setLanguage(kit.language);
       if (kit.brand_color_hex) setBrandColor(kit.brand_color_hex);
+      setContact({
+        phone:      kit.phone      ?? "",
+        website:    kit.website    ?? "",
+        address_en: kit.address_en ?? "",
+        address_ta: kit.address_ta ?? "",
+      });
     } catch { /* no kit yet */ }
-  };
+  }, [campaignId]);
+
+  // Load on mount, not only when the panel is expanded — otherwise the language
+  // dropdown shows the "en" default while a different language is actually saved.
+  useEffect(() => { loadKit(); }, [loadKit]);
 
   const uploadFile = async (type: string, file: File) => {
     setKitLoad(true);
@@ -287,25 +390,16 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
   const saveMeta = async () => {
     setKitLoad(true);
     try {
-      await api.brandKit.setMeta(campaignId, language, brandColor || undefined);
+      await api.brandKit.setMeta(campaignId, {
+        language,
+        brand_color_hex: brandColor || undefined,
+        ...contact,
+      });
       await loadKit();
       toast.success("Brand settings saved!");
     } catch { toast.error("Failed to save brand settings"); }
     finally { setKitLoad(false); }
   };
-
-  const LANGUAGES = [
-    {code:"en",label:"English"},{code:"hi",label:"हिन्दी (Hindi)"},
-    {code:"ta",label:"தமிழ் (Tamil)"},{code:"te",label:"తెలుగు (Telugu)"},
-    {code:"mr",label:"मराठी (Marathi)"},{code:"es",label:"Español"},
-    {code:"fr",label:"Français"},
-  ];
-
-  const [loadStep, setLoadStep] = useState(0);
-  const STEPS = ["🧠 Generating visual spec...","🎨 SDXL generating image...","🖼️ Composing poster...","🔍 Evaluating with Vision AI..."];
-  // Cycle through steps when loading
-  if (loading && loadStep === 0) setLoadStep(1);
-  if (!loading && loadStep > 0) setLoadStep(0);
 
   return (
     <div className="space-y-6">
@@ -361,17 +455,39 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
           onClick={() => { setShowKit(v => !v); if (!showKit) loadKit(); }}
           className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-slate-300 hover:text-white hover:bg-white/5 transition-colors"
         >
-          <span className="flex items-center gap-2">🎨 Brand Kit (Logo · Fonts · Language · Brand Colour)</span>
+          <span className="flex items-center gap-2">🎨 Brand Kit (Assets · Contact · Language · Brand Colour)</span>
           <span className="text-slate-500">{showKit ? "▲" : "▼"}</span>
         </button>
         {showKit && (
           <div className="px-4 pb-4 pt-2 grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Upload row */}
+            {/* Which layout this kit currently earns, and how to upgrade it.
+                Without this the poster silently changes shape with no
+                explanation of why. */}
+            {brandKit && (
+              <div className="md:col-span-2 rounded-lg border border-surface-border bg-surface-muted/50 px-3 py-2">
+                <p className="text-xs text-slate-300">
+                  Layout:{" "}
+                  <span className={brandKit.layout === "brochure" ? "text-emerald-400 font-medium" : "text-brand-300 font-medium"}>
+                    {brandKit.layout === "brochure" ? "Full brochure" : "Designed poster"}
+                  </span>
+                </p>
+                <p className="text-[10px] text-slate-500 mt-0.5">
+                  {brandKit.layout === "brochure"
+                    ? "All zones render, including the contact footer."
+                    : "Add a product cutout and a phone or address below to unlock the contact footer."}
+                </p>
+              </div>
+            )}
+
+            {/* Asset uploads */}
             {([
-              {type:"logo",       label:"Brand Logo",       hint:"any format"},
-              {type:"product",    label:"Product Image",    hint:"Product photo (bg removed by AI)"},
-              {type:"font_bold",  label:"Font (Bold)",      hint:"any format"},
-              {type:"font_regular",label:"Font (Regular)",  hint:"any format"},
+              {type:"logo",           label:"Brand Logo",      hint:"header band"},
+              {type:"partner_logo",   label:"Partner Logo",    hint:"optional, header right"},
+              {type:"product_cutout", label:"Product Cutout",  hint:"transparent PNG — best hero"},
+              {type:"product",        label:"Product Image",   hint:"used if no cutout"},
+              {type:"map_image",      label:"Map / Location",  hint:"contact footer thumbnail"},
+              {type:"font_bold",      label:"Font (Bold)",     hint:"optional"},
+              {type:"font_regular",   label:"Font (Regular)",  hint:"optional"},
             ] as const).map(({type,label,hint}) => (
               <div key={type} className="space-y-1">
                 <label htmlFor={`file-upload-${type}`} className="block text-xs text-slate-400 font-medium cursor-pointer">
@@ -383,8 +499,27 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
                   onChange={e => { const f = e.target.files?.[0]; if (f) uploadFile(type, f); }}
                   className="block w-full text-xs text-slate-400 file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-brand-500/20 file:text-brand-300 file:text-xs file:font-medium cursor-pointer"
                 />
-                {brandKit?.logo && type==="logo" && <p className="text-[10px] text-emerald-400">✓ Logo uploaded</p>}
-                {brandKit?.product && type==="product" && <p className="text-[10px] text-emerald-400">✓ Product image uploaded</p>}
+                {brandKit?.[type as keyof BrandKitInfo] && (
+                  <p className="text-[10px] text-emerald-400">✓ uploaded</p>
+                )}
+              </div>
+            ))}
+
+            {/* Contact details — these populate the brochure's footer zone. */}
+            {([
+              {key:"phone",      label:"Phone",             placeholder:"+91 98765 43210"},
+              {key:"website",    label:"Website",           placeholder:"example.com"},
+              {key:"address_en", label:"Address (English)", placeholder:"12 Main Road, Coimbatore"},
+              {key:"address_ta", label:"Address (Local)",   placeholder:"local-language address"},
+            ] as const).map(({key,label,placeholder}) => (
+              <div key={key} className="space-y-1">
+                <label htmlFor={`contact-${key}`} className="block text-xs text-slate-400 font-medium">{label}</label>
+                <input
+                  type="text" id={`contact-${key}`} name={`contact-${key}`}
+                  value={contact[key]} placeholder={placeholder}
+                  onChange={e => setContact(c => ({ ...c, [key]: e.target.value }))}
+                  className="w-full bg-surface-muted border border-surface-border rounded-lg px-3 py-1.5 text-xs text-slate-300 placeholder:text-slate-600 focus:outline-none focus:border-brand-400"
+                />
               </div>
             ))}
 
@@ -425,8 +560,11 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
       </div>
 
       {/* Generate button */}
-      <div className="flex justify-end">
-        <button onClick={onGenerate} disabled={loading}
+      <div className="flex justify-end items-center gap-3">
+        <span className="text-xs text-slate-500">
+          Language: <span className="text-slate-300">{LANGUAGES.find(l => l.code === language)?.label ?? language}</span>
+        </span>
+        <button onClick={() => onGenerate(language)} disabled={loading}
           className="btn-brand px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
           {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
           Generate Posters + Evaluate
@@ -466,6 +604,8 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
                       <img
                         src={p.metadata_.visual_url}
                         alt="Generated Visual"
+                        loading="lazy"
+                        decoding="async"
                         className="w-full h-full object-contain transition-transform duration-300 group-hover:scale-105"
                       />
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors duration-200 flex items-center justify-center">
@@ -494,6 +634,8 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
                     <img
                       src={p.image_url}
                       alt={`Final Poster ${p.variation_index + 1}`}
+                      loading="lazy"
+                      decoding="async"
                       className="w-full h-full object-contain transition-transform duration-300 group-hover:scale-105"
                     />
                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors duration-200 flex items-center justify-center">
@@ -537,137 +679,6 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function AdCopyTab({ copies, campaignId, onGenerate, loading }: {
-  copies: AdCopy[]; campaignId: string; onGenerate: () => void; loading: boolean;
-}) {
-  const [selected, setSelected] = useState(0);
-  
-  // Deduplicate copies, keeping only the latest per platform
-  const latestCopiesMap = new Map<string, AdCopy>();
-  copies.forEach(c => latestCopiesMap.set(c.platform, c));
-  const uniqueCopies = Array.from(latestCopiesMap.values());
-  
-  const copy = uniqueCopies[selected];
-  const PLATFORM_COLORS: Record<string, string> = {
-    instagram: "text-pink-400", facebook: "text-blue-400",
-    linkedin: "text-cyan-400", twitter: "text-sky-400", email: "text-amber-400",
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="flex justify-end">
-        <button onClick={onGenerate} disabled={loading}
-          className="btn-brand px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2">
-          {loading ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
-          Generate All Platforms
-        </button>
-      </div>
-      {uniqueCopies.length === 0 ? (
-        <div className="glass rounded-xl p-10 border border-surface-border text-center text-slate-500 text-sm">
-          No ad copies yet. Click Generate to create platform-specific copy.
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          <div className="space-y-1">
-            {uniqueCopies.map((c, i) => (
-              <button key={c.id} onClick={() => setSelected(i)}
-                className={`w-full text-left px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  i === selected ? "bg-brand-500/20 text-brand-300" : "text-slate-400 hover:text-slate-200 hover:bg-surface-muted"
-                }`}>
-                <span className={PLATFORM_COLORS[c.platform] || "text-slate-400"}>
-                  {c.platform.charAt(0).toUpperCase() + c.platform.slice(1)}
-                </span>
-              </button>
-            ))}
-          </div>
-          {copy && (
-            <div className="lg:col-span-3 glass-dynamic rounded-xl p-5 space-y-4 animate-scale-up">
-              {copy.headline && (
-                <p className="text-base font-semibold text-white">{copy.headline}</p>
-              )}
-              <p className="text-sm text-slate-300 whitespace-pre-wrap">{copy.body}</p>
-              {copy.cta_variants?.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {copy.cta_variants.map((cta, i) => (
-                    <span key={i} className="px-3 py-1 rounded-full text-xs bg-brand-500/20 text-brand-300 border border-brand-500/30">
-                      {cta}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {copy.hashtags?.length > 0 && (
-                <p className="text-xs text-slate-500">{copy.hashtags.map(h => `#${h}`).join(" ")}</p>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PostingTab({ posts, campaignId, copies, posters, onPost, loading }: {
-  posts: SocialPost[]; campaignId: string; copies: AdCopy[]; posters: Poster[];
-  onPost: (platform: string, ad_copy_id?: string, poster_id?: string) => void;
-  loading: boolean;
-}) {
-  const [platform, setPlatform] = useState("instagram");
-  const icons: Record<string, string> = {
-    posted: "✅", posting: "⏳", scheduled: "📅", failed: "❌", pending: "🔄",
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="glass-dynamic rounded-xl p-5 flex items-end gap-4 animate-fade-in-up">
-        <div className="flex-1">
-          <label htmlFor="posting-platform" className="text-xs text-slate-400 uppercase tracking-wide">Platform</label>
-          <select id="posting-platform" name="posting-platform" className="input-dark mt-1" value={platform} onChange={e => setPlatform(e.target.value)}>
-            {["instagram","facebook","linkedin","twitter"].map(p => (
-              <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>
-            ))}
-          </select>
-        </div>
-        <button onClick={() => onPost(platform, copies[0]?.id, posters[0]?.id)}
-          disabled={loading}
-          className="btn-brand px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2 flex-shrink-0">
-          {loading ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-          Post Now
-        </button>
-      </div>
-      <div className="space-y-3">
-        <h3 className="text-sm font-semibold text-slate-400">Post History</h3>
-        {posts.length === 0 ? (
-          <div className="glass rounded-xl p-8 border border-surface-border text-center text-slate-500 text-sm">
-            No posts yet
-          </div>
-        ) : posts.map((p, i) => (
-          <div key={p.id} className="glass-dynamic rounded-xl p-4 flex items-center justify-between animate-fade-in-up" style={{ animationDelay: `${i * 100}ms` }}>
-            <div className="flex items-center gap-3">
-              <span className="text-lg">{icons[p.status] || "🔄"}</span>
-              <div>
-                <p className="text-sm font-medium text-white">{p.platform}</p>
-                <p className="text-xs text-slate-500">
-                  {p.is_mock && <span className="badge-mock px-1.5 py-0.5 rounded mr-1">mock</span>}
-                  {p.platform_post_id || "No ID yet"}
-                </p>
-              </div>
-            </div>
-            <div className="text-right">
-              <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                p.status === "posted" ? "badge-posted" : p.status === "failed" ? "badge-failed" : "badge-pending"
-              }`}>{p.status}</span>
-              {p.platform_url && (
-                <a href={p.platform_url} target="_blank" rel="noreferrer"
-                  className="block text-xs text-brand-400 hover:underline mt-1">View Post ↗</a>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }

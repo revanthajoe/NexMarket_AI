@@ -4,20 +4,23 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import { Loader2, Megaphone, ChevronRight } from "lucide-react";
-import { api, CampaignCreate } from "@/lib/api";
+import { api, PIPELINE_STEPS, LANGUAGES, CampaignCreate } from "@/lib/api";
 
-const PLATFORMS = ["instagram", "facebook", "linkedin", "twitter", "all"];
+const PLATFORMS = ["instagram", "facebook", "telegram", "whatsapp", "all"];
 const GOALS = [
   "brand_awareness", "lead_generation", "sales_conversion",
   "engagement", "app_downloads", "website_traffic",
 ];
 
-const Field = ({ label, htmlFor, required, children }: { label: string, htmlFor?: string, required?: boolean, children: React.ReactNode }) => (
+const Field = ({ label, htmlFor, required, error, children }: {
+  label: string, htmlFor?: string, required?: boolean, error?: string, children: React.ReactNode,
+}) => (
   <div className="space-y-1.5">
     <label htmlFor={htmlFor} className="text-xs font-medium text-slate-400 uppercase tracking-wide">
       {label} {required && <span className="text-brand-400">*</span>}
     </label>
     {children}
+    {error && <p className="text-xs text-red-400">{error}</p>}
   </div>
 );
 
@@ -34,6 +37,8 @@ export default function NewCampaignPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [autoRun, setAutoRun] = useState(true);
+  const [language, setLanguage] = useState("en");
+  const [errors, setErrors] = useState<Record<string, string>>({});
 
   const [form, setForm] = useState<CampaignCreate & { post_now: boolean }>({
     name: "",
@@ -48,19 +53,27 @@ export default function NewCampaignPage() {
     post_now: true,
   });
 
-  const set = (k: string, v: unknown) => setForm((f) => ({ ...f, [k]: v }));
+  const set = (k: string, v: unknown) => {
+    setForm((f) => ({ ...f, [k]: v }));
+    setErrors((e) => {
+      if (!e[k]) return e;
+      const next = { ...e };
+      delete next[k];
+      return next;
+    });
+  };
 
-  const validateForm = () => {
-    const errors: string[] = [];
+  const validateForm = (): Record<string, string> => {
+    const errors: Record<string, string> = {};
 
-    if (form.name.trim().length < 2) errors.push("Campaign name must be at least 2 characters");
-    if (form.product_name.trim().length < 2) errors.push("Product / service name must be at least 2 characters");
-    if (form.description.trim().length < 10) errors.push("Description must be at least 10 characters");
-    if (form.offer.trim().length < 5) errors.push("Offer / promotion must be at least 5 characters");
-    if (form.target_audience.trim().length < 5) errors.push("Target audience must be at least 5 characters");
-    if (!PLATFORMS.includes(form.preferred_platform)) errors.push("Select a valid platform");
-    if (!GOALS.includes(form.campaign_goal)) errors.push("Select a valid campaign goal");
-    if (form.budget !== undefined && form.budget < 0) errors.push("Budget cannot be negative");
+    if (form.name.trim().length < 2) errors.name = "Campaign name must be at least 2 characters";
+    if (form.product_name.trim().length < 2) errors.product_name = "Product / service name must be at least 2 characters";
+    if (form.description.trim().length < 10) errors.description = "Description must be at least 10 characters";
+    if (form.offer.trim().length < 5) errors.offer = "Offer / promotion must be at least 5 characters";
+    if (form.target_audience.trim().length < 5) errors.target_audience = "Target audience must be at least 5 characters";
+    if (!PLATFORMS.includes(form.preferred_platform)) errors.preferred_platform = "Select a valid platform";
+    if (!GOALS.includes(form.campaign_goal)) errors.campaign_goal = "Select a valid campaign goal";
+    if (form.budget !== undefined && form.budget < 0) errors.budget = "Budget cannot be negative";
 
     return errors;
   };
@@ -68,9 +81,10 @@ export default function NewCampaignPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const errors = validateForm();
-    if (errors.length > 0) {
-      toast.error(errors[0]);
+    const found = validateForm();
+    setErrors(found);
+    if (Object.keys(found).length > 0) {
+      toast.error(`Please fix ${Object.keys(found).length} field${Object.keys(found).length > 1 ? "s" : ""} below`);
       return;
     }
 
@@ -89,11 +103,17 @@ export default function NewCampaignPage() {
       const campaign = await api.campaigns.create(normalizedPayload);
       toast.success(`Campaign "${campaign.name}" created!`);
 
+      // Persist the language before the pipeline starts — the backend reads the
+      // brand kit when generating, so setting it afterwards would be too late.
+      try {
+        await api.brandKit.setMeta(campaign.id, { language });
+      } catch {
+        toast.error("Campaign created, but the language setting could not be saved.");
+      }
+
       if (autoRun) {
-        await api.n8n.trigger(campaign.id, [
-          "poster", "adcopy", "evaluate", "forecast", "optimize", "post",
-        ]);
-        toast.success("🚀 AI pipeline started — poster, copy, and post queued!");
+        await api.n8n.trigger(campaign.id, PIPELINE_STEPS);
+        toast.success("🚀 AI pipeline started — follow progress on the campaign page.");
       }
 
       router.push(`/campaign/${campaign.id}`);
@@ -125,7 +145,7 @@ export default function NewCampaignPage() {
       {/* Form */}
       <form onSubmit={handleSubmit} className="space-y-6">
         <Section title="Campaign Info">
-          <Field label="Campaign Name" htmlFor="campaign-name" required>
+          <Field label="Campaign Name" htmlFor="campaign-name" required error={errors.name}>
             <input
               id="campaign-name"
               name="campaign-name"
@@ -136,7 +156,7 @@ export default function NewCampaignPage() {
               required
             />
           </Field>
-          <Field label="Product / Service Name" htmlFor="product-name" required>
+          <Field label="Product / Service Name" htmlFor="product-name" required error={errors.product_name}>
             <input
               id="product-name"
               name="product-name"
@@ -147,7 +167,7 @@ export default function NewCampaignPage() {
               required
             />
           </Field>
-          <Field label="Product Description" htmlFor="product-description" required>
+          <Field label="Product Description" htmlFor="product-description" required error={errors.description}>
             <textarea
               id="product-description"
               name="product-description"
@@ -161,7 +181,7 @@ export default function NewCampaignPage() {
         </Section>
 
         <Section title="Offer & Audience">
-          <Field label="Offer / Promotion" htmlFor="offer" required>
+          <Field label="Offer / Promotion" htmlFor="offer" required error={errors.offer}>
             <input
               id="offer"
               name="offer"
@@ -172,7 +192,7 @@ export default function NewCampaignPage() {
               required
             />
           </Field>
-          <Field label="Target Audience" htmlFor="target-audience" required>
+          <Field label="Target Audience" htmlFor="target-audience" required error={errors.target_audience}>
             <input
               id="target-audience"
               name="target-audience"
@@ -184,7 +204,7 @@ export default function NewCampaignPage() {
             />
           </Field>
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Campaign Goal" htmlFor="campaign-goal" required>
+            <Field label="Campaign Goal" htmlFor="campaign-goal" required error={errors.campaign_goal}>
               <select
                 id="campaign-goal"
                 name="campaign-goal"
@@ -199,7 +219,7 @@ export default function NewCampaignPage() {
                 ))}
               </select>
             </Field>
-            <Field label="Preferred Platform" htmlFor="preferred-platform" required>
+            <Field label="Preferred Platform" htmlFor="preferred-platform" required error={errors.preferred_platform}>
               <select
                 id="preferred-platform"
                 name="preferred-platform"
@@ -219,7 +239,7 @@ export default function NewCampaignPage() {
 
         <Section title="Optional Settings">
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Budget (USD)" htmlFor="budget">
+            <Field label="Budget (USD)" htmlFor="budget" error={errors.budget}>
               <input
                 id="budget"
                 name="budget"
@@ -231,7 +251,7 @@ export default function NewCampaignPage() {
                 onChange={(e) => set("budget", e.target.value ? Number(e.target.value) : undefined)}
               />
             </Field>
-            <Field label="Brand Style" htmlFor="brand-style">
+            <Field label="Visual Style Hint" htmlFor="brand-style">
               <input
                 id="brand-style"
                 name="brand-style"
@@ -240,8 +260,25 @@ export default function NewCampaignPage() {
                 value={form.brand_style ?? ""}
                 onChange={(e) => set("brand_style", e.target.value)}
               />
+              <p className="text-[11px] text-slate-600">
+                Free-text mood for the AI art direction. Logo, fonts and brand colour
+                are uploaded separately in the campaign&apos;s Brand Kit.
+              </p>
             </Field>
           </div>
+          <Field label="Poster &amp; Ad Copy Language" htmlFor="campaign-language">
+            <select
+              id="campaign-language"
+              name="campaign-language"
+              className="input-dark"
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+            >
+              {LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code}>{l.label}</option>
+              ))}
+            </select>
+          </Field>
         </Section>
 
         {/* Auto-run toggle */}

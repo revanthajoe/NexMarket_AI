@@ -40,13 +40,11 @@ async def lifespan(app: FastAPI):
 
     if settings.is_sqlite:
         from app.db.session import Base, engine
-        from sqlalchemy import text
 
+        # WAL / synchronous / busy_timeout are applied by the engine's "connect"
+        # listener in app.db.session, so they are already set on this connection
+        # and on every other one the process opens.
         async with engine.begin() as conn:
-            # Enable WAL mode before table creation — critical for concurrent writes
-            await conn.execute(text("PRAGMA journal_mode=WAL"))
-            await conn.execute(text("PRAGMA synchronous=NORMAL"))
-            await conn.execute(text("PRAGMA busy_timeout=5000"))
             await conn.run_sync(Base.metadata.create_all)
 
     # Pre-warm ML models in background (non-blocking)
@@ -65,8 +63,15 @@ async def lifespan(app: FastAPI):
             pass
 
     asyncio.create_task(warm_models())
+
+    # Publishes due scheduled posts and syncs platform engagement.
+    from app.services.posting.worker import start_worker
+    worker_tasks = start_worker()
+
     logger.info("nexmarket_started")
     yield
+    for task in worker_tasks:
+        task.cancel()
     logger.info("nexmarket_shutting_down")
 
 

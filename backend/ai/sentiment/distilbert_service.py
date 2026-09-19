@@ -53,8 +53,8 @@ class DistilBERTService(BaseModelService):
         )
 
     def _do_unload(self) -> None:
-        memory_manager.purge(self._pipeline)
         self._pipeline = None
+        memory_manager.purge()
 
     def health_check(self) -> bool:
         try:

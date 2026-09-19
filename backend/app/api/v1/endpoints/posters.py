@@ -39,50 +39,78 @@ async def generate_posters(
         payload.campaign_id, payload.variations,
     )
 
+    # Snapshot the campaign fields we need, then release the read transaction.
+    # Generation below takes minutes of GPU time per variation, and SQLite only
+    # permits one writer — holding this transaction open starves the posting
+    # worker and analytics sync and comes back as "database is locked".
+    campaign_fields = dict(
+        campaign_name=campaign.name,
+        product_name=campaign.product_name,
+        description=campaign.description,
+        offer=campaign.offer,
+        target_audience=campaign.target_audience,
+        campaign_goal=campaign.campaign_goal,
+        brand_style=payload.style_override or campaign.brand_style,
+        platform=campaign.preferred_platform or "instagram",
+        campaign_id=campaign.id,
+    )
+    await db.commit()
+
     results = []
     for i in range(payload.variations):
+        gen = None
         try:
             gen = await poster_generator.generate(
-                campaign_name=campaign.name,
-                product_name=campaign.product_name,
-                description=campaign.description,
-                offer=campaign.offer,
-                target_audience=campaign.target_audience,
-                campaign_goal=campaign.campaign_goal,
-                brand_style=payload.style_override or campaign.brand_style,
+                **campaign_fields,
                 variation=i,
-                platform=campaign.preferred_platform or "instagram",
-                campaign_id=campaign.id,
                 seed=(payload.seed + i) if payload.seed is not None else None,
+                language=payload.language,
+            )
+
+            poster = Poster(
+                campaign_id=campaign_fields["campaign_id"],
+                image_url=gen["image_url"],
+                prompt_used=gen["prompt_used"],
+                provider=gen["provider"],
+                variation_index=i,
+                metadata_=gen.get("metadata_"),
+            )
+            db.add(poster)
+            # Commit per variation: one short write transaction each, so a
+            # later failure cannot roll back posters already generated.
+            await db.commit()
+            await db.refresh(poster)
+            results.append(poster)
+            logger.info(
+                "poster_generate_saved poster_id=%s url=%s",
+                poster.id, poster.image_url,
             )
         except Exception as exc:
             logger.error(
                 "poster_generate_error campaign_id=%s variation=%d error=%s",
                 payload.campaign_id, i, exc, exc_info=True,
             )
+            # The image already exists on disk if generation got that far — only
+            # the DB write failed. Log the path so minutes of GPU output are
+            # recoverable instead of being silently orphaned.
+            if gen is not None:
+                logger.error(
+                    "poster_generate_orphaned_image campaign_id=%s variation=%d url=%s",
+                    payload.campaign_id, i, gen.get("image_url"),
+                )
+            # The failure may have been the commit itself, which leaves the
+            # session unusable — get_db() commits again on the way out.
+            await db.rollback()
+            # Each variation costs minutes of GPU time. If earlier ones already
+            # succeeded, keep them instead of failing the whole request and
+            # throwing that work away.
+            if results:
+                logger.warning(
+                    "poster_generate_partial campaign_id=%s produced=%d/%d",
+                    payload.campaign_id, len(results), payload.variations,
+                )
+                break
             raise HTTPException(status_code=500, detail=f"Poster generation failed: {exc}")
-
-        poster = Poster(
-            campaign_id=campaign.id,
-            image_url=gen["image_url"],
-            prompt_used=gen["prompt_used"],
-            provider=gen["provider"],
-            variation_index=i,
-            metadata_=gen.get("metadata_")
-        )
-        db.add(poster)
-        await db.flush()
-        await db.refresh(poster)
-        results.append(poster)
-        logger.info(
-            "poster_generate_saved poster_id=%s url=%s",
-            poster.id, poster.image_url,
-        )
-
-    # Commit so created_at is persisted and populated on returned objects
-    await db.commit()
-    for p in results:
-        await db.refresh(p)
 
     return results
 

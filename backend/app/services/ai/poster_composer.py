@@ -5,11 +5,12 @@ Enhanced Poster Composition Engine
 
 Capabilities:
   • Responsive text layout  — word-wrap + auto font-size shrink
+  • Complex-script text     — all text goes through text_shaper (HarfBuzz), so
+                              Tamil and other complex scripts render correctly
   • Dynamic brand assets    — real logo (PNG/transparent), custom TTF fonts
   • Multi-platform aspect   — uses PosterFormat to resize / crop canvas
   • Brand colour theming    — CTA button uses brand_color_hex if provided
-  • Product image inlay     — optionally composites a product cutout (rembg)
-  • Multilingual text       — whatever the caller passes, Pillow renders it
+  • Product image inlay     — composites a product cutout
   • Gradient overlays       — proportional to canvas size
 
 Text rendering priority:
@@ -17,6 +18,10 @@ Text rendering priority:
   2. Campaign headline (above offer, auto-wrap)
   3. Offer (large, gold, auto-wrap)
   4. CTA button (bottom-center, coloured pill)
+
+All text is rasterized by `text_shaper.render_text` rather than PIL's
+`ImageDraw.text`. PIL cannot shape complex scripts on this build (no libraqm),
+which made Tamil render with mis-ordered vowel signs. See text_shaper.py.
 """
 from __future__ import annotations
 
@@ -25,20 +30,23 @@ import math
 from pathlib import Path
 from typing import Optional
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
+
+from app.services.ai import text_shaper
 
 logger = logging.getLogger(__name__)
 
-# ─── Fallback system fonts (Windows) ────────────────────────────────────────
-_SYS_BOLD  = r"C:\Windows\Fonts\arialbd.ttf"
-_SYS_REG   = r"C:\Windows\Fonts\arial.ttf"
-
-
-def _try_font(path: str, size: int) -> ImageFont.FreeTypeFont:
-    try:
-        return ImageFont.truetype(path, size)
-    except Exception:
-        return ImageFont.load_default()
+# rembg calls sys.exit(1) (raising SystemExit, a BaseException) when its
+# onnxruntime backend is missing, instead of raising ImportError. Probe once
+# at import time so _paste_product can skip the cutout without re-triggering
+# that crash (and its stderr spam) on every single poster generation.
+try:
+    from rembg import remove as _rembg_remove
+    _REMBG_AVAILABLE = True
+except BaseException as exc:
+    logger.warning("poster_composer rembg unavailable, product cutout disabled: %s", exc)
+    _rembg_remove = None
+    _REMBG_AVAILABLE = False
 
 
 def _hex_to_rgba(hex_color: Optional[str], default=(220, 38, 38, 255)) -> tuple:
@@ -53,25 +61,77 @@ def _hex_to_rgba(hex_color: Optional[str], default=(220, 38, 38, 255)) -> tuple:
         return default
 
 
+def render_cta_pill(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    cta_text: str,
+    font_path: str,
+    center_x: int,
+    pill_bottom_y: int,
+    height_ref: int,
+    width_ref: int,
+    fill: tuple,
+) -> int:
+    """
+    Draw the rounded-rectangle CTA button, horizontally centered on `center_x`
+    with its bottom edge (including padding) at `pill_bottom_y`. Shared by
+    PosterComposer and BrochureComposer so both render identical CTA styling.
+
+    `height_ref`/`width_ref` are the dimensions the button's proportions scale
+    from — normally the canvas H/W, but a composer may pass a zone's own
+    height when the button lives inside a sub-band rather than the full canvas.
+
+    Returns the button's total rendered height (including padding), so callers
+    can reserve space above it.
+    """
+    cta_upper = cta_text.upper()
+    cta_size  = int(height_ref * 0.036)
+    cta_img   = text_shaper.render_text(cta_upper, font_path, cta_size, (255, 255, 255, 255))
+    cta_w, cta_h = cta_img.width, cta_img.height
+
+    bpx, bpy = int(width_ref * 0.045), int(height_ref * 0.012)
+    cta_x     = center_x - cta_w // 2
+    pill_top  = pill_bottom_y - cta_h - 2 * bpy
+    text_y    = pill_top + bpy
+
+    draw.rounded_rectangle(
+        [cta_x - bpx, pill_top, cta_x + cta_w + bpx, pill_bottom_y],
+        radius=int(height_ref * 0.022),
+        fill=fill,
+    )
+    canvas.alpha_composite(cta_img, (max(0, cta_x), max(0, text_y)))
+    return pill_bottom_y - pill_top
+
+
 class PosterComposer:
 
     def __init__(
         self,
-        font_bold_path: str = _SYS_BOLD,
-        font_reg_path: str  = _SYS_REG,
+        font_bold_path: Optional[str] = None,
+        font_reg_path: Optional[str]  = None,
     ) -> None:
+        # None is fine — _font_path() falls back to the vendored Noto faces.
         self.font_bold_path = font_bold_path
         self.font_reg_path  = font_reg_path
 
     # ── Font helpers ─────────────────────────────────────────────────────────
 
-    def _get_font(self, size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-        path = self.font_bold_path if bold else self.font_reg_path
-        return _try_font(path, max(size, 8))
+    def _font_path(self, text: str, bold: bool = False) -> str:
+        """
+        Resolve the font to use for `text`.
+
+        A custom uploaded font wins for Latin, but Tamil always routes to the
+        vendored Tamil face — an uploaded Latin-only TTF would render Tamil as
+        tofu, which is exactly the bug this replaced.
+        """
+        if text_shaper.has_tamil(text):
+            return text_shaper.font_for_text(text, bold=bold)
+        custom = self.font_bold_path if bold else self.font_reg_path
+        return custom or text_shaper.font_for_text(text, bold=bold)
 
     # ── Text helpers ─────────────────────────────────────────────────────────
 
-    def _wrap_text(self, draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> list[str]:
+    def _wrap_text(self, text: str, font_path: str, size: int, max_width: int) -> list[str]:
         words = text.split()
         if not words:
             return []
@@ -79,8 +139,7 @@ class PosterComposer:
         current = words[0]
         for word in words[1:]:
             test = f"{current} {word}"
-            bb = draw.textbbox((0, 0), test, font=font)
-            if (bb[2] - bb[0]) <= max_width:
+            if text_shaper.measure_text(test, font_path, size)[0] <= max_width:
                 current = test
             else:
                 lines.append(current)
@@ -88,16 +147,9 @@ class PosterComposer:
         lines.append(current)
         return lines
 
-    def _text_block_height(self, draw, lines: list[str], font, line_gap: int = 4) -> int:
-        total = 0
-        for line in lines:
-            bb = draw.textbbox((0, 0), line, font=font)
-            total += (bb[3] - bb[1]) + line_gap
-        return total
-
     def _draw_text_block(
         self,
-        draw: ImageDraw.ImageDraw,
+        canvas: Image.Image,
         text: str,
         center_x: int,
         anchor_y: int,           # bottom anchor when draw_up=True, top when False
@@ -109,40 +161,37 @@ class PosterComposer:
         draw_up: bool = True,    # draw upward from anchor_y
         shadow: bool = True,
     ) -> int:
-        """Draw responsive text block. Returns the total height rendered."""
-        size = initial_size
-        font = self._get_font(size, bold=font_bold)
+        """Draw a responsive, shaped text block. Returns the total height rendered."""
+        if not text:
+            return 0
 
-        # Shrink font until block fits in max_height
+        font_path = self._font_path(text, bold=font_bold)
+
+        # Shrink until the wrapped block fits within max_height.
+        size = initial_size
         while size > 10:
-            lines = self._wrap_text(draw, text, font, max_width)
-            h = self._text_block_height(draw, lines, font)
-            if h <= max_height:
+            lines    = self._wrap_text(text, font_path, size, max_width)
+            line_h   = text_shaper.measure_text("Ag", font_path, size)[1]
+            line_gap = max(3, size // 8)
+            if len(lines) * (line_h + line_gap) <= max_height:
                 break
             size = max(10, size - 2)
-            font = self._get_font(size, bold=font_bold)
 
-        lines = self._wrap_text(draw, text, font, max_width)
+        lines    = self._wrap_text(text, font_path, size, max_width)
+        line_h   = text_shaper.measure_text("Ag", font_path, size)[1]
         line_gap = max(3, size // 8)
-
-        total_h = 0
-        line_sizes: list[int] = []
-        for ln in lines:
-            bb = draw.textbbox((0, 0), ln, font=font)
-            lh = bb[3] - bb[1]
-            line_sizes.append(lh)
-            total_h += lh + line_gap
+        total_h  = len(lines) * (line_h + line_gap)
 
         current_y = (anchor_y - total_h) if draw_up else anchor_y
 
-        for ln, lh in zip(lines, line_sizes):
-            bb = draw.textbbox((0, 0), ln, font=font)
-            w = bb[2] - bb[0]
-            x = center_x - w // 2
+        for ln in lines:
+            img = text_shaper.render_text(ln, font_path, size, fill)
+            x   = center_x - img.width // 2
             if shadow:
-                draw.text((x + 2, current_y + 2), ln, font=font, fill=(0, 0, 0, 160))
-            draw.text((x, current_y), ln, font=font, fill=fill)
-            current_y += lh + line_gap
+                shadow_img = text_shaper.render_text(ln, font_path, size, (0, 0, 0, 160))
+                canvas.alpha_composite(shadow_img, (max(0, x + 2), max(0, current_y + 2)))
+            canvas.alpha_composite(img, (max(0, x), max(0, current_y)))
+            current_y += line_h + line_gap
 
         return total_h
 
@@ -170,15 +219,23 @@ class PosterComposer:
         product_path: str,
         canvas_w: int,
         canvas_h: int,
+        already_transparent: bool = False,
     ) -> None:
         """
-        Remove background from product image and composite it into the
-        right-center of the poster for a product-focus layout.
+        Composite the product image into the right-center of the poster.
+
+        `already_transparent` is the brand kit's pre-cut PNG path — it skips
+        rembg entirely, which is the only way this works here (rembg needs
+        onnxruntime, absent, plus numpy>=2.3 which conflicts with torch 2.1.2).
         """
+        if not already_transparent and not _REMBG_AVAILABLE:
+            logger.debug("poster_composer product cutout skipped - rembg unavailable")
+            return
+
         try:
-            from rembg import remove
             raw = Image.open(product_path).convert("RGBA")
-            cutout = remove(raw)
+            cutout = raw if already_transparent else _rembg_remove(raw)
+
             # Fit into right 40% of canvas, max 55% height
             max_h = int(canvas_h * 0.55)
             scale = max_h / cutout.height
@@ -189,7 +246,7 @@ class PosterComposer:
             paste_y = (canvas_h - max_h) // 2
             canvas.alpha_composite(cutout, (paste_x, paste_y))
             logger.debug("poster_composer product cutout pasted")
-        except Exception as exc:
+        except BaseException as exc:
             logger.warning("poster_composer product paste failed: %s", exc)
 
     # ── Gradient helpers ─────────────────────────────────────────────────────
@@ -230,6 +287,7 @@ class PosterComposer:
         # Brand kit extras (all optional)
         logo_path: Optional[str] = None,
         product_image_path: Optional[str] = None,
+        product_cutout_path: Optional[str] = None,
         target_width: int = 1080,
         target_height: int = 1080,
         brand_color_hex: Optional[str] = None,
@@ -246,8 +304,10 @@ class PosterComposer:
             self._add_gradient(img, "bottom", 0.50, 230)
             self._add_gradient(img, "top",    0.18, 160)
 
-            # Optional: product image composited on right side
-            if product_image_path:
+            # Product image — prefer the pre-cut transparent PNG when present
+            if product_cutout_path:
+                self._paste_product(img, product_cutout_path, W, H, already_transparent=True)
+            elif product_image_path:
                 self._paste_product(img, product_image_path, W, H)
 
             draw   = ImageDraw.Draw(img)
@@ -260,29 +320,23 @@ class PosterComposer:
             if logo_path:
                 self._paste_logo(img, logo_path, margin)
             else:
-                brand_font = self._get_font(int(H * 0.031), bold=True)
-                draw.text((margin, margin), brand_name.upper(), font=brand_font, fill=(255, 255, 255, 240))
+                bf = self._font_path(brand_name, bold=True)
+                brand_img = text_shaper.render_text(
+                    brand_name.upper(), bf, int(H * 0.031), (255, 255, 255, 240)
+                )
+                img.alpha_composite(brand_img, (margin, margin))
 
             # 2. CTA button (bottom-center)
-            cta_size = int(H * 0.036)
-            cta_font = self._get_font(cta_size, bold=True)
-            cta_text = cta.upper()
-            bb = draw.textbbox((0, 0), cta_text, font=cta_font)
-            cta_w, cta_h = bb[2] - bb[0], bb[3] - bb[1]
-            cta_x  = cx - cta_w // 2
-            cta_y  = H - margin - cta_h - int(H * 0.018)
-            bpx, bpy = int(W * 0.045), int(H * 0.018)
-            draw.rounded_rectangle(
-                [cta_x - bpx, cta_y - bpy, cta_x + cta_w + bpx, cta_y + cta_h + bpy],
-                radius=int(H * 0.022),
-                fill=btn_color,
+            cta_font   = self._font_path(cta, bold=True)
+            cta_bottom = H - margin
+            cta_rendered_h = render_cta_pill(
+                img, draw, cta, cta_font, cx, cta_bottom, H, W, btn_color,
             )
-            draw.text((cta_x, cta_y), cta_text, font=cta_font, fill=(255, 255, 255, 255))
 
             # 3. Offer (responsive, above CTA)
-            offer_bottom = cta_y - bpy - int(H * 0.025)
+            offer_bottom = cta_bottom - cta_rendered_h - int(H * 0.025)
             offer_h = self._draw_text_block(
-                draw, offer.upper(), cx, offer_bottom,
+                img, offer.upper(), cx, offer_bottom,
                 max_w, int(H * 0.20),
                 font_bold=True, initial_size=int(H * 0.065),
                 fill=(255, 215, 0, 255), draw_up=True,
@@ -291,7 +345,7 @@ class PosterComposer:
             # 4. Campaign headline (responsive, above offer)
             headline_bottom = offer_bottom - offer_h - int(H * 0.012)
             self._draw_text_block(
-                draw, campaign_name.upper(), cx, headline_bottom,
+                img, campaign_name.upper(), cx, headline_bottom,
                 max_w, int(H * 0.18),
                 font_bold=True, initial_size=int(H * 0.042),
                 fill=(255, 255, 255, 255), draw_up=True,

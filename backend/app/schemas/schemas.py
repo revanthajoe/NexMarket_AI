@@ -16,7 +16,7 @@ class CampaignCreate(BaseModel):
     offer: str = Field(..., min_length=5, max_length=500)
     target_audience: str = Field(..., min_length=5, max_length=500)
     campaign_goal: str = Field(..., max_length=255)
-    preferred_platform: str = Field(..., pattern="^(instagram|facebook|linkedin|twitter|all)$")
+    preferred_platform: str = Field(..., pattern="^(instagram|facebook|telegram|whatsapp|all)$")
     brand_style: Optional[str] = None
     budget: Optional[float] = Field(None, ge=0)
     post_schedule: Optional[datetime] = None
@@ -62,6 +62,10 @@ class PosterGenerateRequest(BaseModel):
         None,
         description="Pin the SDXL seed to exactly reproduce a prior poster. Omit for a fresh deterministic-per-variation seed.",
     )
+    language: Optional[str] = Field(
+        None,
+        description="Poster language code (en/hi/ta/te/mr/es/fr). Overrides the saved brand kit language for this request.",
+    )
 
 
 class PosterRead(BaseModel):
@@ -101,9 +105,13 @@ class PosterEvaluationRead(BaseModel):
 class AdCopyGenerateRequest(BaseModel):
     campaign_id: str
     platforms: List[str] = Field(
-        default=["instagram", "facebook", "linkedin", "twitter", "email"]
+        default=["instagram", "facebook", "telegram", "whatsapp", "email"]
     )
     tone: Optional[str] = "professional"
+    language: Optional[str] = Field(
+        None,
+        description="Ad copy language code (en/hi/ta/te/mr/es/fr). Falls back to the campaign's brand kit language.",
+    )
 
 
 class AdCopyRead(BaseModel):
@@ -115,6 +123,9 @@ class AdCopyRead(BaseModel):
     cta_variants: Optional[List[str]]
     hashtags: Optional[List[str]]
     tone: Optional[str]
+    # True when Qwen's output failed to parse as JSON and this row is the
+    # hardcoded English placeholder rather than a real generation result.
+    fallback: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -214,9 +225,24 @@ class OptimizationRead(BaseModel):
 
 # ─── Social Posting ──────────────────────────────────────────────────────────
 
+# Kept in sync with posting_service.SUPPORTED_PLATFORMS. Telegram and WhatsApp
+# were added here too — without it the pattern silently 422s a platform the
+# adapter layer fully supports.
+_PLATFORM_PATTERN = "^(instagram|facebook|telegram|whatsapp)$"
+
+
 class PostRequest(BaseModel):
     campaign_id: str
-    platform: str = Field(..., pattern="^(instagram|facebook|linkedin|twitter)$")
+    platform: str = Field(..., pattern=_PLATFORM_PATTERN)
+    ad_copy_id: Optional[str] = None
+    poster_id: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+
+
+class CampaignPublishRequest(BaseModel):
+    """Publish one campaign to several platforms in a single call."""
+
+    platforms: List[str] = Field(..., min_length=1)
     ad_copy_id: Optional[str] = None
     poster_id: Optional[str] = None
     scheduled_at: Optional[datetime] = None
@@ -246,6 +272,11 @@ class N8nTriggerCampaign(BaseModel):
     steps: List[str] = Field(
         default=["poster", "adcopy", "evaluate", "forecast", "optimize", "post"]
     )
+    # Which platforms the "post" step publishes to. None (the default) falls
+    # back to the campaign's own preferred_platform — existing callers,
+    # including n8n/workflows/campaign_pipeline.json, send no `platforms` at
+    # all and keep working exactly as before.
+    platforms: Optional[List[str]] = None
 
 
 class N8nWebhookResponse(BaseModel):

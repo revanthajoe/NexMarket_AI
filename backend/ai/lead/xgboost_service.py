@@ -63,8 +63,8 @@ class XGBoostService(BaseModelService):
             logger.info("xgboost model saved path=%s", _MODEL_PATH)
 
     def _do_unload(self) -> None:
-        memory_manager.purge(self._booster)
         self._booster = None
+        memory_manager.purge()
 
     def health_check(self) -> bool:
         try:

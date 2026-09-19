@@ -24,7 +24,7 @@ import httpx
 
 from ai.base_model import BaseModelService
 from ai.quantization import get_bnb_4bit_config
-from ai.device_manager import device_manager
+from ai.device_manager import device_manager, model_input_device
 from ai import memory_manager
 from ai.model_registry import get_spec
 
@@ -33,8 +33,8 @@ logger = logging.getLogger(__name__)
 _SPEC = get_spec("qwen_vl")
 _MAX_NEW_TOKENS = 1024
 
-# Default evaluation when vision inference fails
-_MOCK_EVAL = {
+# Default evaluation when vision inference fails or returns unparsable JSON
+_FALLBACK_EVAL = {
     "overall_score": 72,
     "dimensions": {
         "readability": 78, "layout": 70, "branding": 68,
@@ -44,6 +44,7 @@ _MOCK_EVAL = {
     "weaknesses":  ["Background competes with text", "Font hierarchy unclear"],
     "suggestions": ["Increase whitespace around headline", "Use single accent for CTA"],
     "verdict": "good",
+    "fallback": True,   # synthetic score — vision inference did not run
 }
 
 
@@ -65,11 +66,19 @@ class QwenVLService(BaseModelService):
         logger.info("qwen_vl loading model_id=%s 4bit=%s attn=%s",
                     _SPEC.model_id, bnb_config is not None, attn_impl)
 
-        self._processor = AutoProcessor.from_pretrained(
-            _SPEC.model_id,
-            trust_remote_code = _SPEC.trust_remote,
-            local_files_only    = True,
-        )
+        try:
+            self._processor = AutoProcessor.from_pretrained(
+                _SPEC.model_id,
+                trust_remote_code = _SPEC.trust_remote,
+                local_files_only    = True,
+            )
+        except OSError:
+            logger.warning("qwen_vl processor cache miss, downloading")
+            self._processor = AutoProcessor.from_pretrained(
+                _SPEC.model_id,
+                trust_remote_code = _SPEC.trust_remote,
+                local_files_only    = False,
+            )
 
         load_kwargs: dict = dict(
             trust_remote_code   = _SPEC.trust_remote,
@@ -83,16 +92,26 @@ class QwenVLService(BaseModelService):
             load_kwargs["torch_dtype"] = device_manager.compute_dtype()
             load_kwargs["device_map"]  = "auto" if device_manager.info.has_cuda else None
 
-        self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
-            _SPEC.model_id,
-            **load_kwargs,
-        )
+        try:
+            self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                _SPEC.model_id,
+                **load_kwargs,
+            )
+        except OSError:
+            logger.warning("qwen_vl model cache miss, downloading")
+            load_kwargs["local_files_only"] = False
+            self._model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+                _SPEC.model_id,
+                **load_kwargs,
+            )
         self._model.eval()
 
     def _do_unload(self) -> None:
-        memory_manager.purge(self._model, self._processor)
+        # Drop references BEFORE purging — purge() cannot free what is still
+        # referenced when empty_cache()/gc.collect() run.
         self._model     = None
         self._processor = None
+        memory_manager.purge()
 
     def health_check(self) -> bool:
         return self._model is not None and self._processor is not None
@@ -111,7 +130,7 @@ class QwenVLService(BaseModelService):
             return self._run_vision(img_b64, mime, system_prompt, user_prompt)
         except Exception as exc:
             logger.error("qwen_vl evaluate failed: %s", exc)
-            return _MOCK_EVAL
+            return _FALLBACK_EVAL
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -151,7 +170,7 @@ class QwenVLService(BaseModelService):
                 videos        = video_inputs,
                 return_tensors = "pt",
                 padding       = True,
-            ).to(device_manager.device)
+            ).to(model_input_device(self._model))
         except ImportError:
             # Fallback: manual text-only template (evaluation degrades gracefully)
             text = self._processor.apply_chat_template(
@@ -159,7 +178,7 @@ class QwenVLService(BaseModelService):
             )
             inputs = self._processor(
                 text=[text], return_tensors="pt", padding=True
-            ).to(device_manager.device)
+            ).to(model_input_device(self._model))
 
         with torch.no_grad():
             output_ids = self._model.generate(
@@ -200,11 +219,11 @@ def _load_image_as_base64(image_url: str) -> tuple[str, str]:
 
 
 def _parse_json_eval(raw: str) -> dict:
-    """Parse JSON from Qwen-VL response, falling back to mock on failure."""
+    """Parse JSON from Qwen-VL response, falling back to a default evaluation on failure."""
     cleaned = re.sub(r"^```(?:json)?", "", raw.strip(), flags=re.IGNORECASE)
     cleaned = re.sub(r"```$", "", cleaned.strip()).strip()
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         logger.warning("qwen_vl json_parse_failed raw_head=%s", raw[:120])
-        return _MOCK_EVAL
+        return _FALLBACK_EVAL

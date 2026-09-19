@@ -5,9 +5,6 @@ yarn-debug.log*
 yarn-error.log*
 .npm
 .eslintcache
-package-lock.json
-yarn.lock
-pnpm-lock.yaml
 
 # ─── Next.js ─────────────────────────────────────────────────────────────────
 .next/

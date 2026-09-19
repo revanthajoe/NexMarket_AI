@@ -22,14 +22,14 @@ services:
   # ── Backend (FastAPI) ──────────────────────────────────────────────────────
   backend:
     build:
-      context: ./backend
+      context: ../backend
       dockerfile: Dockerfile
     container_name: nexmarket_backend
-    env_file: ./backend/.env
+    env_file: ../backend/.env
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app
+      - ../backend:/app
       - poster_assets:/app/assets/posters
     depends_on:
       postgres:
@@ -38,6 +38,15 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://nexmarket:nexmarket@postgres:5432/nexmarket_db
       - SYNC_DATABASE_URL=postgresql://nexmarket:nexmarket@postgres:5432/nexmarket_db
+      - AI_TEXT_PROVIDER=${AI_TEXT_PROVIDER:-gemini}
+      # Instagram/Facebook/WhatsApp fetch posted media server-side, so this
+      # must be a publicly reachable URL (e.g. a domain in front of this
+      # container, or an ngrok tunnel during testing) — a Docker-internal
+      # service name like http://backend:8000 is NOT reachable from Meta's
+      # servers and will not work. Leave unset to fall back to
+      # STATIC_BASE_URL for local/mock-only use. Telegram is exempt (direct
+      # byte upload) and unaffected either way.
+      - PUBLIC_MEDIA_BASE_URL=${PUBLIC_MEDIA_BASE_URL:-}
 
   # ── n8n ───────────────────────────────────────────────────────────────────
   n8n:
@@ -56,14 +65,14 @@ services:
       - GENERIC_TIMEZONE=Asia/Kolkata
     volumes:
       - n8n_data:/home/node/.n8n
-      - ./n8n/workflows:/home/node/.n8n/workflows:ro
+      - ../n8n/workflows:/home/node/.n8n/workflows:ro
     depends_on:
       - backend
 
   # ── Frontend (Next.js) ─────────────────────────────────────────────────────
   frontend:
     build:
-      context: ./frontend
+      context: ../frontend
       dockerfile: Dockerfile
     container_name: nexmarket_frontend
     ports:

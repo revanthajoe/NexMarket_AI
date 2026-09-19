@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.models.models import AdCopy, Campaign
 from app.schemas.schemas import AdCopyGenerateRequest, AdCopyRead
 from app.services.ai.ad_generator import ad_copy_generator
+from app.services.ai.brand_kit import get_brand_kit
 
 router = APIRouter(prefix="/adcopy", tags=["Ad Copy"])
 
@@ -23,6 +24,10 @@ async def generate_ad_copy(
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
+    # Explicit request language wins; otherwise fall back to the saved brand kit
+    # so ad copy matches the language the posters are generated in.
+    language = payload.language or get_brand_kit(campaign.id).language
+
     copies = await ad_copy_generator.generate(
         product_name=campaign.product_name,
         description=campaign.description,
@@ -31,6 +36,7 @@ async def generate_ad_copy(
         campaign_goal=campaign.campaign_goal,
         platforms=payload.platforms,
         tone=payload.tone or "professional",
+        language=language,
     )
 
     results = []
@@ -43,6 +49,7 @@ async def generate_ad_copy(
             cta_variants=data.get("cta_variants", []),
             hashtags=data.get("hashtags", []),
             tone=payload.tone,
+            fallback=data.get("fallback", False),
         )
         db.add(ad)
         await db.flush()

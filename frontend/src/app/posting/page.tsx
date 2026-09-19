@@ -2,24 +2,46 @@
 
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
-import { Loader2, Send, Activity, RefreshCw } from "lucide-react";
-import { api, Campaign, SocialPost } from "@/lib/api";
+import { Loader2, Send, Activity, RefreshCw, BarChart3 } from "lucide-react";
+import { api, Campaign, IntegrationStatus, SocialPost } from "@/lib/api";
 
 export default function PostingStudioPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [selectedCampaign, setSelectedCampaign] = useState<string>("");
   const [posts, setPosts] = useState<SocialPost[]>([]);
   const [loading, setLoading] = useState(false);
-  const [health, setHealth] = useState<Record<string, boolean> | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [health, setHealth] = useState<Record<string, IntegrationStatus> | null>(null);
 
   useEffect(() => {
     api.campaigns.list().then(res => {
       setCampaigns(res);
       if (res.length > 0) setSelectedCampaign(res[0].id);
     }).catch(() => {});
-    
-    api.posting.healthCheck().then(setHealth).catch(() => {});
+
+    api.posting.integrationsStatus().then(setHealth).catch(() => {});
   }, []);
+
+  const handleSyncMetrics = async () => {
+    if (!selectedCampaign) return;
+    setSyncing(true);
+    try {
+      const r = await api.posting.syncMetrics(selectedCampaign);
+      if (r.posts_checked === 0) {
+        toast("No published posts to sync yet");
+      } else {
+        toast.success(
+          `Synced ${r.synced}/${r.posts_checked} posts` +
+          (r.failed ? ` · ${r.failed} failed` : "") +
+          (r.mock_sourced ? ` · ${r.mock_sourced} from mock adapter` : "")
+        );
+      }
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Metrics sync failed");
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   useEffect(() => {
     if (!selectedCampaign) return;
@@ -76,7 +98,17 @@ export default function PostingStudioPage() {
           </div>
 
           <div className="glass-dynamic rounded-xl p-5 animate-fade-in-up delay-100">
-            <h2 className="text-lg font-semibold text-white mb-4">Post Timeline</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-white">Post Timeline</h2>
+              <button
+                onClick={handleSyncMetrics}
+                disabled={syncing || !selectedCampaign}
+                className="text-xs px-3 py-2 rounded-lg bg-surface-muted hover:bg-surface-border transition-colors text-slate-300 flex items-center gap-2 disabled:opacity-50"
+              >
+                {syncing ? <Loader2 size={13} className="animate-spin" /> : <BarChart3 size={13} />}
+                Sync Engagement
+              </button>
+            </div>
             {loading ? (
               <div className="flex justify-center p-10"><Loader2 className="animate-spin text-brand-400" /></div>
             ) : posts.length === 0 ? (
@@ -118,18 +150,29 @@ export default function PostingStudioPage() {
               <div className="flex justify-center p-4"><Loader2 className="animate-spin text-slate-500" /></div>
             ) : (
               <div className="space-y-3">
-                {Object.entries(health).map(([platform, isHealthy]) => (
-                  <div key={platform} className="flex justify-between items-center p-3 rounded-lg bg-surface-muted/30 border border-surface-border">
-                    <span className="text-sm text-slate-300 capitalize">{platform}</span>
-                    <span className="flex items-center gap-1.5 text-xs">
-                      {isHealthy ? (
-                        <><span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" /> <span className="text-emerald-400">Operational</span></>
-                      ) : (
-                        <><span className="w-2 h-2 rounded-full bg-rose-400" /> <span className="text-rose-400">Offline</span></>
-                      )}
-                    </span>
-                  </div>
-                ))}
+                {Object.entries(health).map(([platform, s]) => {
+                  // A mock adapter always answers "healthy" — showing that as
+                  // Operational claimed a connection that doesn't exist.
+                  const label = !s.configured
+                    ? { text: "Not configured", dot: "bg-slate-500", fg: "text-slate-400" }
+                    : s.healthy
+                      ? { text: "Operational", dot: "bg-emerald-400 animate-pulse", fg: "text-emerald-400" }
+                      : { text: "Credentials failing", dot: "bg-rose-400", fg: "text-rose-400" };
+                  return (
+                    <div key={platform} className="flex justify-between items-center p-3 rounded-lg bg-surface-muted/30 border border-surface-border">
+                      <span className="text-sm text-slate-300 capitalize flex items-center gap-2">
+                        {platform}
+                        {s.mode === "mock" && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] badge-mock">Mock</span>
+                        )}
+                      </span>
+                      <span className="flex items-center gap-1.5 text-xs">
+                        <span className={`w-2 h-2 rounded-full ${label.dot}`} />
+                        <span className={label.fg}>{label.text}</span>
+                      </span>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

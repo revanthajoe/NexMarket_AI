@@ -68,10 +68,6 @@ assets/posters/
 .dmypy.json
 dmypy.json
 
-# ─── Alembic ─────────────────────────────────────────────────────────────────
-alembic/versions/*.py
-!alembic/versions/__init__.py
-
 # ─── OS ──────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

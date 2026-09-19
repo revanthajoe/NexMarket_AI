@@ -39,13 +39,13 @@ _FORMATS: dict[str, dict[str, PosterFormat]] = {
         "story":  PosterFormat("facebook", "story",  1080, 1920, "9:16",   sdxl_width=576,  sdxl_height=1024),
         "square": PosterFormat("facebook", "square", 1080, 1080, "1:1",    sdxl_width=768,  sdxl_height=768),
     },
-    "linkedin": {
-        "feed":   PosterFormat("linkedin", "feed",   1200,  627, "1.91:1", sdxl_width=1024, sdxl_height=536),
-        "square": PosterFormat("linkedin", "square", 1080, 1080, "1:1",    sdxl_width=768,  sdxl_height=768),
+    "telegram": {
+        "feed":   PosterFormat("telegram", "feed",   1280,  720, "16:9",   sdxl_width=1024, sdxl_height=576),
+        "square": PosterFormat("telegram", "square", 1080, 1080, "1:1",    sdxl_width=768,  sdxl_height=768),
     },
-    "twitter": {
-        "feed":   PosterFormat("twitter", "feed",   1600,  900, "16:9",   sdxl_width=1024, sdxl_height=576),
-        "square": PosterFormat("twitter", "square", 1080, 1080, "1:1",    sdxl_width=768,  sdxl_height=768),
+    "whatsapp": {
+        "feed":   PosterFormat("whatsapp", "square", 1080, 1080, "1:1",    sdxl_width=768,  sdxl_height=768),
+        "square": PosterFormat("whatsapp", "square", 1080, 1080, "1:1",    sdxl_width=768,  sdxl_height=768),
     },
 }
 

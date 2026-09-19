@@ -17,8 +17,27 @@ transformers==4.49.0
 tokenizers>=0.21.0,<0.22.0
 torch>=2.1.0,<2.4.0
 torchvision>=0.16.0,<0.19.0
-accelerate>=0.31.0
-bitsandbytes>=0.43.1          # 4-bit NF4 quantization
+# Upper-bounded to freeze the combination verified working with the
+# diffusers==0.30.3 / peft==0.13.2 pins below (both mid-2024 releases) —
+# accelerate/huggingface_hub moving further ahead has a real chance of
+# breaking diffusers' LoRA loading or peft's adapter injection.
+accelerate>=0.31.0,<1.15.0
+# 4-bit NF4 quantization. BOTH bounds are load-bearing — this sits in a narrow
+# window between two independent constraints, which is why it is pinned exactly:
+#   * >= 0.43.2 — transformers 4.49 calls .to() on a 4-bit model and older
+#     bitsandbytes rejects it ("Calling `to()` is not supported for `4-bit`").
+#   * <  0.49   — 0.49.x calls torch.library.impl_abstract, which does not exist
+#     until torch 2.2; against the torch 2.1.2 pinned above it raises
+#     AttributeError at import. transformers imports bitsandbytes lazily, so it
+#     surfaces as an unrelated "Failed to import
+#     transformers.integrations.bitsandbytes" the first time a quantized model
+#     loads — which took down Qwen, Qwen-VL and the entire poster pipeline.
+# An unbounded ">=0.43.1" is what let pip install 0.49.2 and break everything.
+# 0.43.2 and 0.45.5 are both verified working against torch 2.1.2 here, so this
+# is a range rather than an exact pin — pinning one version would force a
+# needless downgrade of an environment already running a working one.
+# Do not widen the upper bound without moving torch first.
+bitsandbytes>=0.43.2,<0.49
 # xformers - OPTIONAL: Memory-efficient attention for SDXL
 # Note: xformers has deep nested paths causing Windows long-path issues.
 # If needed, install via conda: conda install xformers
@@ -30,17 +49,50 @@ qwen-vl-utils>=0.0.8         # Qwen2.5-VL vision utilities
 # ── Diffusion / Image generation ──────────────────────────────────────────────
 diffusers==0.30.3
 Pillow>=10.3.0
+peft==0.13.2                  # LoRA adapters for the fine-tuned SDXL poster style
+
+# ── Poster text rendering ─────────────────────────────────────────────────────
+# Pillow's Windows wheels ship without libraqm, so PIL.features.check("raqm") is
+# False and PIL cannot shape complex scripts. Tamil needs shaping: the vowel
+# signs U+0BC6..U+0BC8 are prepositioned and U+0BCA..U+0BCC are split vowels.
+# HarfBuzz shapes the run, FreeType rasterizes the positioned glyphs.
+# See app/services/ai/text_shaper.py. Neither pulls numpy>=2, so both are safe
+# alongside the numpy<2 pin required by torch 2.1.2.
+uharfbuzz>=0.39.0
+freetype-py>=2.4.0
 
 # ── Classical ML (pure-PyTorch LSTM — no TensorFlow) ─────────────────────────
 xgboost>=2.0.3
+# Capped below 2.0 because torch 2.1.2's C-API/ABI predates numpy 2.x support.
+# Known accepted conflict: rembg (product-cutout, optional/soft-disabled since
+# its own onnxruntime dependency is also absent) requires numpy>=2.3 and will
+# never actually be satisfiable alongside torch here - `pip check` reports
+# this and it can be ignored.
+#
+# This has broken for real, not just as a `pip check` warning: something
+# (most likely rembg's own resolution) pulled the whole numpy-dependent chain
+# forward to numpy 2.4.6 + numpy-2.x builds of scipy/pandas/scikit-learn/
+# xgboost. `pip check` reported nothing wrong (everything was consistent with
+# EACH OTHER), but torch silently lost the ability to convert tensors to numpy
+# arrays, surfacing 3 minutes later as `RuntimeError: Numpy is not available`
+# deep inside an unrelated SDXL scheduler load. `pip check` is NOT sufficient
+# to catch this — after any install that touches this chain, verify with:
+#   python -c "import torch; print(torch.tensor([1.0]).numpy())"
+# tests/test_main.py::test_numpy_torch_abi_compatible checks this on every run.
 numpy>=1.26.0,<2.0.0
 scikit-learn>=1.5.0
+huggingface_hub<0.37.0        # see accelerate comment above - freeze the verified HF stack
 
 # ── Social posting ────────────────────────────────────────────────────────────
 tweepy>=4.14.0
 
 # ── Optional cloud fallback (only required if IMAGE_PROVIDER=openai) ──────────
 openai>=1.30.0
+
+# ── Gemini (required if IMAGE_PROVIDER=gemini) ────────────────────────────────
+# Pure-python HTTP client: pulls no torch/numpy pins, so it is safe alongside
+# the deliberately frozen HF stack above.
+google-genai>=1.60.0
 
 # ── Dev / Test ────────────────────────────────────────────────────────────────
 pytest>=8.2.0

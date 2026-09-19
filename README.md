@@ -13,7 +13,7 @@ Submit a product → NexMarket AI automatically:
 4. **Predicts engagement** using LSTM forecasting (7–30 day horizon)
 5. **Scores leads** using XGBoost (hot/warm/cold with feature importance)
 6. **Optimizes campaign strategy** via Thompson Sampling contextual bandit
-7. **Auto-posts to social media** (Instagram, Facebook, LinkedIn, Twitter — with mock mode)
+7. **Auto-posts to social media** (Instagram, Facebook, Telegram, WhatsApp — with mock mode)
 8. **Orchestrates everything through n8n** (webhooks, polling, scheduling, retries)
 9. **Shows results in a real-time dashboard** (Recharts, stats, forecasts)
 
@@ -43,7 +43,7 @@ Submit a product → NexMarket AI automatically:
 │  └──────────────┘  └───────────────┘  └──────────────────────┘ │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │ Social Posting Service                                    │   │
-│  │ Instagram · Facebook · LinkedIn · Twitter · Mock         │   │
+│  │ Instagram · Facebook · Telegram · WhatsApp · Mock        │   │
 │  └──────────────────────────────────────────────────────────┘   │
 └──────────────────────────┬──────────────────────────────────────┘
                            │
@@ -74,7 +74,7 @@ Submit a product → NexMarket AI automatically:
 | Lead ML     | XGBoost (trained on synthetic data)               |
 | Forecasting | LSTM (pure PyTorch — NO GRU, NO TensorFlow)        |
 | Optimization| Thompson Sampling Contextual Bandit               |
-| Social Post | Meta Graph API / LinkedIn API / Tweepy / Mock     |
+| Social Post | Meta Graph API / Telegram Bot API / WhatsApp Cloud API / Mock |
 
 ---
 
@@ -147,6 +147,14 @@ docker run -d \
 ```bash
 cd backend
 
+# Activate the project virtualenv FIRST.
+# The pinned stack (torch 2.1.2+cu121 / diffusers 0.30.3 / peft 0.13.2) lives
+# only in .venv. Running the server on a global Python silently drops packages
+# — a missing `peft` disables diffusers' PEFT backend and poster generation
+# fails with "PEFT backend is required for this method."
+.venv\Scripts\activate          # Windows (PowerShell/cmd)
+# source .venv/bin/activate     # macOS / Linux
+
 # Copy and configure environment
 cp .env.example .env
 # Edit .env — set OPENAI_API_KEY, etc. (leave defaults for demo mode)
@@ -157,8 +165,8 @@ pip install -r requirements.txt
 # Run migrations
 alembic upgrade head
 
-# Start server
-uvicorn app.main:app --reload --port 8000
+# Start server (use the venv's python explicitly so the interpreter is unambiguous)
+.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
 ### 3. Frontend Setup
@@ -224,7 +232,7 @@ Full Swagger UI: **http://localhost:8000/docs**
 1. **Open Dashboard** → http://localhost:3000 — show stats and chart
 2. **Create Campaign** → Fill form for "CloudNotes Pro, 50% off, students" → toggle auto-pipeline ON
 3. **Show poster** → AI-generated SVG/image with Vision evaluation radar chart
-4. **Show ad copies** → Platform-specific variants (Instagram, LinkedIn, email)
+4. **Show ad copies** → Platform-specific variants (Instagram, Facebook, email)
 5. **Show posting tab** → Mock post published instantly with ID and URL
 6. **Show forecast** → LSTM 7-day engagement forecast chart
 7. **Show optimization** → Thompson Sampling platform scores + recommendation
@@ -262,9 +270,9 @@ With these settings:
 | LLM_PROVIDER          | local      | openai, gemini, or local               |
 | IMAGE_PROVIDER        | local      | openai, stability, mock, or local      |
 | SOCIAL_MODE           | mock       | live or mock                           |
-| META_ACCESS_TOKEN     | (empty)    | Meta Graph API token                   |
-| LINKEDIN_ACCESS_TOKEN | (empty)    | LinkedIn API token                     |
-| TWITTER_API_KEY       | (empty)    | Twitter/X API key                      |
+| META_ACCESS_TOKEN     | (empty)    | Meta Graph API token (Instagram/Facebook) |
+| TELEGRAM_BOT_TOKEN    | (empty)    | Telegram bot token                     |
+| WHATSAPP_ACCESS_TOKEN | (empty)    | WhatsApp Cloud API token                |
 | DATABASE_URL          | local pg   | PostgreSQL async URL                   |
 
 ---
@@ -273,11 +281,24 @@ With these settings:
 
 ```bash
 cd backend
-pytest tests/ -v
+
+# Fast suite (18 tests, ~3 min) — run this normally
+pytest -m "not heavy" -v
+
+# Heavy suite — real SDXL poster generation, ~12 min, needs its own process
+pytest -m heavy -v
 ```
 
 Tests cover: health check, campaign CRUD, sentiment analysis, lead scoring,
-poster generation (mock), campaign optimization.
+ad copy generation, LSTM forecasting, engagement analytics, the n8n
+trigger/status contract, social posting, campaign optimization, campaign
+reports, and SDXL seed determinism.
+
+**Why the split:** with `IMAGE_PROVIDER=local`, poster generation loads
+Qwen2.5-3B + SDXL + Qwen2.5-VL. On a 6GB GPU it cannot share a process with the
+other model-loading tests — the CUDA allocator stays too fragmented, SDXL falls
+back to CPU, and fp16 matmul fails with `"addmm_impl_cpu_" not implemented for
+'Half'`. Run it separately.
 
 ---
 
@@ -305,5 +326,5 @@ poster generation (mock), campaign optimization.
 | Lead Prediction  | XGBoost (synthetic train)  | Heuristic formula           |
 | Forecasting      | LSTM (PyTorch, synthetic)  | Linear trend extrapolation  |
 | Optimization     | Thompson Sampling Bandit   | Static platform priors      |
-| Social Posting   | Meta/LinkedIn/Twitter APIs | Mock adapter                |
+| Social Posting   | Meta/Telegram/WhatsApp APIs | Mock adapter               |
 | Orchestration    | n8n + FastAPI webhooks     | Direct API calls            |

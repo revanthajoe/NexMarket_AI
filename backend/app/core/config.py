@@ -7,8 +7,9 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Literal
+from typing import List, Literal, Optional
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -68,8 +69,41 @@ class Settings(BaseSettings):
     LOCAL_LLM_BASE_URL: str = "http://localhost:11434/v1"
 
     # ── Image Generation ──────────────────────────────────────────
-    IMAGE_PROVIDER: Literal["openai", "stability", "mock", "local"] = "mock"
+    # "local"  → SDXL background art + deterministic composer typesetting
+    # "gemini" → Gemini renders the complete poster, text included (no composer)
+    IMAGE_PROVIDER: Literal["openai", "stability", "mock", "local", "gemini"] = "mock"
     STABILITY_API_KEY: str = ""
+    GEMINI_IMAGE_MODEL: str = "gemini-2.5-flash-image"
+
+    # ── Generative text/vision provider ───────────────────────────
+    # Which models write marketing COPY and score posters: poster brochure copy,
+    # the SDXL scene spec, poster evaluation, and ad copy.
+    #
+    # Deliberately separate from LLM_PROVIDER / VISION_PROVIDER: those still
+    # govern sentiment, lead scoring, forecasting and anything else, so flipping
+    # this does not drag the whole system onto a cloud provider.
+    #
+    # "gemini" exists because Qwen2.5-3B at 4-bit cannot produce usable
+    # non-English output. For posters it translated the brand name "Birla Opus
+    # Paints" into "பிறந்த உபோஸ் பின்னர்" ("Born Opus After"); for ad copy it
+    # fails to emit parseable JSON at all on Tamil and silently fell back to a
+    # hardcoded English template.
+    #
+    # Was POSTER_PHASE_PROVIDER while it only governed the poster phase; the old
+    # name is still read (see AI_TEXT_PROVIDER validator below) so existing .env
+    # files keep working.
+    AI_TEXT_PROVIDER: Literal["gemini", "local"] = "gemini"
+    POSTER_PHASE_PROVIDER: Optional[Literal["gemini", "local"]] = None
+    GEMINI_TEXT_MODEL: str = "gemini-3.5-flash"
+
+    @model_validator(mode="after")
+    def _honour_legacy_provider_name(self) -> "Settings":
+        # An existing .env that only sets the old name must keep working. Only
+        # applies when AI_TEXT_PROVIDER was left at its default, so an explicit
+        # new-name setting always wins.
+        if self.POSTER_PHASE_PROVIDER is not None and "AI_TEXT_PROVIDER" not in self.model_fields_set:
+            object.__setattr__(self, "AI_TEXT_PROVIDER", self.POSTER_PHASE_PROVIDER)
+        return self
 
     # ── Vision LLM ────────────────────────────────────────────────
     VISION_PROVIDER: Literal["openai", "gemini", "local"] = "openai"
@@ -83,13 +117,37 @@ class Settings(BaseSettings):
     META_ACCESS_TOKEN: str = ""
     META_IG_USER_ID: str = ""
     META_PAGE_ID: str = ""
-    LINKEDIN_ACCESS_TOKEN: str = ""
-    LINKEDIN_PERSON_URN: str = ""
-    LINKEDIN_ORG_URN: str = ""
-    TWITTER_API_KEY: str = ""
-    TWITTER_API_SECRET: str = ""
-    TWITTER_ACCESS_TOKEN: str = ""
-    TWITTER_ACCESS_TOKEN_SECRET: str = ""
+    # Telegram Bot API. The one live platform that needs no public media URL —
+    # its adapter uploads the poster bytes directly (see _resolve_local_media).
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
+
+    # WhatsApp Business Cloud API. Business message distribution, not broadcast
+    # publishing: every send targets one recipient number.
+    WHATSAPP_ACCESS_TOKEN: str = ""
+    WHATSAPP_PHONE_NUMBER_ID: str = ""
+    WHATSAPP_BUSINESS_ACCOUNT_ID: str = ""
+    WHATSAPP_RECIPIENT: str = ""
+
+    # Base URL social platforms fetch generated posters from. Falls back to
+    # STATIC_BASE_URL when unset.
+    #
+    # Instagram, Facebook and WhatsApp all fetch the image server-side, so in
+    # SOCIAL_MODE=live this MUST be publicly reachable — a localhost URL will
+    # fail. Point it at a tunnel (ngrok/cloudflared) or real hosting. Telegram
+    # is exempt: it uploads bytes directly. Mock mode is unaffected.
+    PUBLIC_MEDIA_BASE_URL: str = ""
+
+    @property
+    def effective_media_base_url(self) -> str:
+        return self.PUBLIC_MEDIA_BASE_URL or self.STATIC_BASE_URL
+
+    # ── Posting worker ────────────────────────────────────────────
+    # Publishes scheduled posts once they're due and pulls engagement back from
+    # the platforms. Both loops are no-ops when there's nothing due to do.
+    SCHEDULER_ENABLED: bool = True
+    SCHEDULER_INTERVAL_SECONDS: int = 60
+    METRICS_SYNC_INTERVAL_SECONDS: int = 900
 
     # ── n8n ───────────────────────────────────────────────────────
     N8N_WEBHOOK_BASE: str = "http://localhost:5678/webhook"
@@ -100,6 +158,7 @@ class Settings(BaseSettings):
     POSTER_UPLOAD_DIR: str = "./assets/posters"
     STATIC_BASE_URL: str = "http://localhost:8000/static"
     SDXL_INFERENCE_STEPS: int = 28
+    SDXL_LORA_PATH: str = "./ml/lora/sdxl_poster_lora.safetensors"
 
     # ── ML ────────────────────────────────────────────────────────
     LSTM_MODEL_PATH: str = "./ml/lstm/engagement_lstm.pt"

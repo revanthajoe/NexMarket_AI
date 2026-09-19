@@ -1,22 +1,60 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer,
 } from "recharts";
+import { api, EngagementPoint } from "@/lib/api";
 
-// Stable demo data — defined once outside the component so it never changes between renders
-const DEMO_CHART = Array.from({ length: 14 }, (_, i) => ({
-  day: `Day ${i + 1}`,
-  likes: 200 + ((i * 137 + 41) % 800),
-  reach: 1000 + ((i * 317 + 83) % 4000),
-  clicks: 50 + ((i * 97 + 23) % 300),
-}));
+interface EngagementChartProps {
+  days?: number;
+  /** Scope the series to one campaign; omit for platform-wide totals. */
+  campaignId?: string;
+  /** Bump to force a refetch after an engagement sync. */
+  refreshKey?: number;
+}
 
-export function EngagementChart() {
+export function EngagementChart({ days = 14, campaignId, refreshKey = 0 }: EngagementChartProps) {
+  const [data, setData] = useState<EngagementPoint[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setData(null);
+    setFailed(false);
+    api.analytics.timeseries(days, campaignId)
+      .then(d => { if (!cancelled) setData(d); })
+      .catch(() => { if (!cancelled) setFailed(true); });
+    return () => { cancelled = true; };
+  }, [days, campaignId, refreshKey]);
+
+  if (failed) {
+    return (
+      <div className="h-[220px] flex items-center justify-center text-xs text-slate-500">
+        Could not load engagement data.
+      </div>
+    );
+  }
+
+  if (!data) {
+    return <div className="h-[220px] shimmer rounded-xl" />;
+  }
+
+  if (data.length === 0) {
+    return (
+      <div className="h-[220px] flex flex-col items-center justify-center gap-1 text-center px-6">
+        <p className="text-sm text-slate-400">No engagement data yet</p>
+        <p className="text-xs text-slate-600">
+          Metrics appear here once published posts start reporting analytics.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <ResponsiveContainer width="100%" height={220}>
-      <AreaChart data={DEMO_CHART}>
+      <AreaChart data={data}>
         <defs>
           <linearGradient id="colorLikes" x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%"  stopColor="#6366f1" stopOpacity={0.3} />
@@ -28,7 +66,7 @@ export function EngagementChart() {
           </linearGradient>
         </defs>
         <CartesianGrid strokeDasharray="3 3" stroke="#2d2b4e" />
-        <XAxis dataKey="day" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} />
+        <XAxis dataKey="date" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} />
         <YAxis tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} />
         <Tooltip
           contentStyle={{ background: "#17162a", border: "1px solid #2d2b4e", borderRadius: 8 }}

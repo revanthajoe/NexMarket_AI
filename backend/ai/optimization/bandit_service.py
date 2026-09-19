@@ -6,7 +6,7 @@ Thompson Sampling Contextual Multi-Armed Bandit — Campaign optimizer.
 No ML model loaded — pure statistical computation.
 Does NOT go through ModelManager (no GPU needed).
 
-Arms: instagram, facebook, linkedin, twitter
+Arms: instagram, facebook, telegram, whatsapp
 
 Per-arm Beta distribution parameters (alpha, beta) updated from real CTR.
 Each call to select_arm() draws from Beta distributions and returns the
@@ -23,14 +23,14 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Default Beta priors: (alpha=2, beta=2) — slight positive bias
-_PRIORS = {"instagram": [2, 2], "facebook": [2, 2], "linkedin": [2, 2], "twitter": [2, 2]}
+_PRIORS = {"instagram": [2, 2], "facebook": [2, 2], "telegram": [2, 2], "whatsapp": [2, 2]}
 
 # Platform prior CTR estimates for initial scoring
 _PLATFORM_BASE_CTR = {
     "instagram": 0.035,
     "facebook":  0.026,
-    "linkedin":  0.039,
-    "twitter":   0.022,
+    "telegram":  0.045,
+    "whatsapp":  0.06,
 }
 
 
@@ -101,8 +101,8 @@ class BanditService:
         time_map = {
             "instagram": "18:00–21:00 local",
             "facebook":  "13:00–16:00 local",
-            "linkedin":  "08:00–10:00 local",
-            "twitter":   "12:00–14:00 local",
+            "telegram":  "09:00–11:00 local",
+            "whatsapp":  "10:00–12:00 local",
         }
         rec_time = time_map.get(best_arm, "10:00–12:00 local")
 

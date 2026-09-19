@@ -6,7 +6,8 @@ Adapter: routes ad copy generation to InferenceManager → ModelManager → Qwen
 Handles:
   • Platform-specific prompt building
   • JSON response parsing
-  • Demo template fallback (no model / demo mode)
+  • Template fallback if the model call raises (never a mock mode — LLM_PROVIDER
+    is always a real provider in this deployment)
 """
 from __future__ import annotations
 
@@ -33,17 +34,17 @@ _DEMO_COPY_TEMPLATE = {
         "cta_variants": ["Learn More", "Shop Now", "Get Offer"],
         "hashtags": [],
     },
-    "linkedin": {
-        "headline": "{product_name}: Transforming how {target_audience} works",
-        "body": "Exciting offer for our LinkedIn community.\n\n{product_name} — {offer}",
-        "cta_variants": ["Learn More", "Explore Now"],
-        "hashtags": ["#innovation", "#business", "#growth"],
-    },
-    "twitter": {
+    "telegram": {
         "headline": None,
-        "body": "🔥 {product_name} | {offer} — Perfect for {target_audience}! 👇",
-        "cta_variants": ["Shop Now", "Don't Miss Out!"],
-        "hashtags": ["#deal", "#sale"],
+        "body": "📢 {product_name} — {offer}\n\nPerfect for {target_audience}.",
+        "cta_variants": ["Shop Now", "Learn More"],
+        "hashtags": [],
+    },
+    "whatsapp": {
+        "headline": None,
+        "body": "Hi! 👋 {product_name} — {offer}. Perfect for {target_audience}. Reply to know more!",
+        "cta_variants": ["Get the Deal", "Learn More"],
+        "hashtags": [],
     },
     "email": {
         "headline": "[Exclusive] {offer} on {product_name}",
@@ -65,27 +66,63 @@ class AdCopyGeneratorService:
         campaign_goal: str,
         platforms: list[str],
         tone: str = "professional",
+        language: str = "en",
     ) -> dict[str, dict]:
-        logger.info("adcopy_generate platforms=%s provider=%s", platforms, settings.LLM_PROVIDER)
-
-        if settings.LLM_PROVIDER == "mock":
-            return self._generate_demo(product_name, offer, target_audience, platforms)
+        logger.info(
+            "adcopy_generate platforms=%s provider=%s language=%s",
+            platforms, settings.LLM_PROVIDER, language,
+        )
 
         try:
-            from ai.inference_manager import inference_manager
+            from app.services.ai.text_provider import generate_marketing_json
             system_prompt = AD_COPY_SYSTEM_PROMPT
             user_prompt   = build_ad_copy_prompt(
-                product_name, description, offer, target_audience, campaign_goal, platforms, tone
+                product_name, description, offer, target_audience,
+                campaign_goal, platforms, tone, language,
             )
-            result = await inference_manager.generate_ad_copy(system_prompt, user_prompt)
-            if result:
-                return result
+            # Routed through AI_TEXT_PROVIDER (Gemini by default), the same
+            # switch poster copy uses. This is what actually fixes non-English
+            # ad copy: Qwen2.5-3B could not emit parseable JSON for Tamil at
+            # all — it failed both attempts below and fell through to the
+            # hardcoded English template, so a Tamil request came back looking
+            # like a successful English generation. Gemini's
+            # response_mime_type="application/json" removes that failure mode.
+            #
+            # The retry stays for the local branch, where failure is a
+            # stochastic sampling outcome (temperature=0.7, do_sample=True)
+            # rather than a deterministic error, and the model is already
+            # resident in GPU memory so a second draw is cheap.
+            for attempt in (1, 2):
+                result = await generate_marketing_json(system_prompt, user_prompt)
+                if result:
+                    return result
+                logger.warning(
+                    "adcopy_json_empty attempt=%d/2 provider=%s language=%s platforms=%s — "
+                    "the model returned no usable JSON object",
+                    attempt, settings.AI_TEXT_PROVIDER, language, platforms,
+                )
         except Exception as exc:
-            logger.warning("adcopy_fallback error=%s", exc)
+            logger.warning("adcopy_fallback error=%s", exc, exc_info=True)
 
-        return self._generate_demo(product_name, offer, target_audience, platforms)
+        # Both attempts failed (or the call raised). Falling through to
+        # hardcoded English is real campaign data slotted into fake copy in
+        # the wrong language — it must never be mistaken for a real result,
+        # which is exactly what happened before this flag existed: the
+        # fallback template is plausible enough that a failed Tamil request
+        # silently came back as fluent-looking English with no visible error.
+        logger.warning(
+            "adcopy_fallback_used language=%s platforms=%s — returning "
+            "placeholder English copy, not a real generation result",
+            language, platforms,
+        )
+        return self._generate_fallback(product_name, offer, target_audience, platforms)
 
-    def _generate_demo(self, product_name, offer, target_audience, platforms) -> dict:
+    def _generate_fallback(self, product_name, offer, target_audience, platforms) -> dict:
+        # `result` is keyed by platform name (the endpoint iterates
+        # `copies.items()` expecting exactly that shape), so the flag has to
+        # live inside each platform's own dict, not as a sibling top-level key
+        # — a top-level "fallback" key would make the endpoint's per-platform
+        # loop try to treat `True` as a platform's data and crash.
         result = {}
         for platform in platforms:
             tmpl = _DEMO_COPY_TEMPLATE.get(platform)
@@ -104,8 +141,9 @@ class AdCopyGeneratorService:
                 "body":         fmt(tmpl["body"]),
                 "cta_variants": tmpl["cta_variants"],
                 "hashtags":     tmpl["hashtags"],
+                "fallback":     True,
             }
-        logger.info("adcopy_demo_generated platforms=%s", platforms)
+        logger.info("adcopy_fallback_generated platforms=%s", platforms)
         return result
 
 

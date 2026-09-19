@@ -19,7 +19,7 @@ from typing import Optional
 
 from ai.base_model import BaseModelService
 from ai.quantization import get_bnb_4bit_config
-from ai.device_manager import device_manager
+from ai.device_manager import device_manager, model_input_device
 from ai import memory_manager
 from ai.model_registry import get_spec
 
@@ -49,11 +49,19 @@ class QwenLLMService(BaseModelService):
         logger.info("qwen_llm loading model_id=%s 4bit=%s attn=%s",
                     _SPEC.model_id, bnb_config is not None, attn_impl)
 
-        self._tokenizer = AutoTokenizer.from_pretrained(
-            _SPEC.model_id,
-            trust_remote_code=_SPEC.trust_remote,
-            local_files_only=True,
-        )
+        try:
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                _SPEC.model_id,
+                trust_remote_code=_SPEC.trust_remote,
+                local_files_only=True,
+            )
+        except OSError:
+            logger.warning("qwen_llm tokenizer cache miss, downloading")
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                _SPEC.model_id,
+                trust_remote_code=_SPEC.trust_remote,
+                local_files_only=False,
+            )
 
         load_kwargs: dict = dict(
             trust_remote_code = _SPEC.trust_remote,
@@ -69,16 +77,26 @@ class QwenLLMService(BaseModelService):
             load_kwargs["torch_dtype"] = dtype
             load_kwargs["device_map"]  = "auto" if device_manager.info.has_cuda else None
 
-        self._model = AutoModelForCausalLM.from_pretrained(
-            _SPEC.model_id,
-            **load_kwargs,
-        )
+        try:
+            self._model = AutoModelForCausalLM.from_pretrained(
+                _SPEC.model_id,
+                **load_kwargs,
+            )
+        except OSError:
+            logger.warning("qwen_llm model cache miss, downloading")
+            load_kwargs["local_files_only"] = False
+            self._model = AutoModelForCausalLM.from_pretrained(
+                _SPEC.model_id,
+                **load_kwargs,
+            )
         self._model.eval()
 
     def _do_unload(self) -> None:
-        memory_manager.purge(self._model, self._tokenizer)
+        # Drop references BEFORE purging — purge() cannot free what is still
+        # referenced when empty_cache()/gc.collect() run.
         self._model     = None
         self._tokenizer = None
+        memory_manager.purge()
 
     def health_check(self) -> bool:
         try:
@@ -134,7 +152,11 @@ class QwenLLMService(BaseModelService):
             tokenize=False,
             add_generation_prompt=True,
         )
-        inputs = self._tokenizer(text, return_tensors="pt").to(device_manager.device)
+        # device_map="auto" lets accelerate place (or offload) the model, so ask
+        # the model where its inputs belong rather than assuming CUDA.
+        inputs = self._tokenizer(text, return_tensors="pt").to(
+            model_input_device(self._model)
+        )
 
         with torch.no_grad():
             output_ids = self._model.generate(

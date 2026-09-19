@@ -140,3 +140,222 @@ Target per spec: 13/13 + per-module model smoke tests + frontend tests = ~20+ te
 - Test coverage additions: 4-6 hours (mostly writing model-loading validation tests)
 - Documentation: 2-3 hours (consolidating existing content + adding deployment guide)
 - Total: 6-9 hours to reach spec's "fully completed" state
+
+---
+
+# Phase 2 — Handwritten Punch List (2026-09-07)
+
+Worked one item at a time from the user's handwritten list. Two items were
+explicitly deferred by the user: **model fine-tuning** and **"Add DL"** — the
+user is training SDXL themselves in a separate notebook, and we integrate the
+resulting weights afterwards.
+
+## 1. Run Pipeline button — FIXED
+
+**Root cause:** the button was not miswired; it just never waited.
+`POST /n8n/trigger/campaign` only *queues* a `BackgroundTasks` job and returns
+immediately, so the UI's generic `runAction` helper instantly toasted
+"Full Pipeline complete!" and reloaded before anything had been generated. The
+user saw no new posters and concluded the button was broken.
+
+**Fix:** replaced fire-and-forget with trigger-then-poll in
+`frontend/src/app/campaign/[id]/page.tsx` — after triggering, the page polls
+`/n8n/status/{id}` every 3s, shows a live progress bar while the campaign is
+`generating`, and only reports success (or failure) once the status settles.
+The interval is cleared on unmount.
+
+**Second bug found and fixed while doing this:** `n8n_trigger_campaign` set
+`campaign.status = "generating"` on the request session but relied on
+`get_db`'s post-yield commit, which can land *after* the background task has
+already written the final status — clobbering `posted`/`ready` back to
+`generating` and leaving the poller spinning forever. Added an explicit
+`await db.commit()` before scheduling the task (same class of race as the
+`posting.py` bug fixed in phase 1).
+
+**Consistency:** the new-campaign auto-run and the detail-page button sent
+different step lists. Both now use a single exported `PIPELINE_STEPS` constant.
+
+## 2. Brand Kit poster language — FIXED
+
+**Root cause (two compounding causes):**
+1. The language dropdown wrote to local React state only. `POST /posters/generate`
+   sent just `campaign_id` and `variations` — no language — so the backend
+   re-read the *previously saved* `meta.json`. Changing the dropdown without
+   clicking "Save Brand Settings" first silently generated in the old language.
+2. The Brand Kit panel is collapsed by default and only loaded the kit when
+   expanded, so the dropdown displayed `en` even when another language was saved.
+
+**Fix:** made language explicit end-to-end — added `language` to
+`PosterGenerateRequest`, `_generate_local` now resolves
+`language = requested_language or kit.language` (explicit request wins), the
+endpoint threads it through, and the frontend loads the kit on mount and sends
+the selected language with every generate call.
+
+**Related gap also fixed:** ad copy was *never* localized — `AdCopyGenerateRequest`
+had `tone` but no `language`, so copy was always English regardless of the brand
+kit. Added `language` to the schema, the prompt template, `ad_generator.generate()`,
+the endpoint (falling back to the brand kit), and the n8n pipeline.
+
+## 3. Ad Copy tab — ENHANCED
+
+Was a single "Generate All Platforms" button plus a read-only viewer. Added:
+per-platform regenerate, a tone selector (the backend already accepted `tone`
+but the UI hardcoded `"professional"`), a language selector, copy-to-clipboard
+on headline/body/CTAs/hashtags, and per-platform character counts against real
+limits (Twitter 280, Instagram 2200, LinkedIn 3000) that turn red when exceeded.
+Regenerating one platform now merges into the list instead of replacing it.
+
+## 4. New Campaign page — IMPROVED
+
+- `validateForm()` already built a full error list but `handleSubmit` discarded
+  everything except `errors[0]`. Errors are now per-field and rendered inline,
+  clearing as the user types.
+- Added a language selector, saved as brand-kit meta immediately after creation
+  and **before** the auto-run trigger — previously the first pipeline run was
+  always English because language could only be set after the fact.
+- Relabelled `brand_style` → "Visual Style Hint" with a note clarifying it is
+  art-direction mood, not the structured Brand Kit.
+
+## 5. UI performance — IMPROVED
+
+- **Request caching/dedupe** added to `api.ts`: GETs share in-flight promises and
+  a 10s TTL cache; any mutation clears the cache; failed requests are not cached.
+  Pipeline status polling bypasses the cache, and `invalidateCache()` is exported
+  and called after the pipeline finishes (server-side writes with no client request).
+- **Removed a `setState`-during-render anti-pattern** in `PosterTab` — and the
+  `loadStep`/`STEPS` state it drove turned out to be entirely dead code.
+- Hoisted `TABS` and `StatusBadge` out of the component body (they were
+  reconstructed on every render); memoized the ad-copy dedupe map and campaign
+  list slice.
+- Added `loading="lazy"` + `decoding="async"` to poster images.
+- Added pagination (20/page) to the campaign list, which previously rendered
+  every campaign.
+
+## 6. Mock data removed from the dashboard — FIXED
+
+`EngagementChart` rendered `DEMO_CHART` — 14 days of numbers from
+`(i * 137 + 41) % 800` formulas — and the dashboard labelled it **"Live Data"**.
+It had never called an API.
+
+- Added `GET /analytics/engagement/timeseries?days=N` (day-grouped totals across
+  all campaigns). Grouping uses `func.date(event_date)` — grouping on the raw
+  timestamp would have made two events on the same day into two chart points.
+- `EngagementChart` now fetches real data, shows a loading shimmer, an honest
+  empty state when no analytics exist, and an error state on failure.
+- Removed the misleading "Live Data" badge.
+
+## 7. Test coverage — EXPANDED (13 → 19 tests)
+
+Added `test_adcopy_generate`, `test_adcopy_generate_missing_campaign`,
+`test_forecast_create`, `test_analytics_timeseries`, `test_n8n_trigger_and_status`,
+and `test_n8n_status_missing_campaign` — covering ad copy, LSTM forecasting, the
+new timeseries endpoint, and the n8n trigger/poll contract the Run Pipeline
+button depends on. Previously all four areas had zero coverage.
+
+### Test-isolation issue diagnosed and handled (pre-existing)
+
+Running the whole suite in one process, `test_poster_generation` failed with
+`"addmm_impl_cpu_" not implemented for 'Half'` — fp16 weights executing on CPU.
+
+**This is not a regression.** Evidence:
+- It failed in **146s**, versus the ~670s a real GPU run takes — it never had a
+  working GPU pipeline.
+- The same failure (`assert 500 == 200`) appeared in the phase-1 full-suite run.
+- Run in isolation it **PASSES in 668s (11m 08s)** — confirmed this session.
+- Nothing changed in this phase touches dtype or device selection.
+
+**Mechanism:** on the 6GB GPU, models loaded by the earlier tests leave the CUDA
+allocator too fragmented, so `enable_model_cpu_offload()` leaves SDXL's layers
+on CPU, where fp16 matmul is unimplemented. My new tests (`test_adcopy_generate`
+loads Qwen2.5-3B, `test_forecast_create` loads the LSTM) run before it and make
+the pressure worse — turning an already-borderline failure into a reliable one.
+
+**Handled** via the marker split the plan called for: added `backend/pytest.ini`
+registering a `heavy` marker, marked `test_poster_generation` with it and
+documented the reasoning inline, and updated the README:
+- `pytest -m "not heavy"` → **18/18 passing**, ~3 min
+- `pytest -m heavy` → **1/1 passing**, ~11 min, own process
+
+## Bonus bug found while testing: numpy version drift
+
+`test_sentiment_analysis` failed asserting a positive label. **Root cause was not
+the test** — numpy 2.4.6 was installed while `requirements.txt` pins
+`numpy>=1.26.0,<2.0.0`, and torch 2.1.2 / cv2 are built against numpy 1.x. The
+ABI mismatch (`numpy.core.multiarray failed to import`) made `transformers` fail
+to import, so **DistilBERT sentiment analysis was silently falling back to
+keyword matching in the real app**, not just in tests. Restored the pinned
+version (`pip install "numpy>=1.26.0,<2.0.0"`); real DistilBERT inference works
+again. Same class of environment drift as the phase-1 diffusers issue.
+
+## Verification performed
+
+- Frontend `tsc --noEmit` clean; `npm run build` succeeds (11 routes).
+- Backend imports clean. **Fast suite 18/18 passing; heavy suite 1/1 passing**
+  (real Qwen2.5-3B → SDXL → composer → Qwen2.5-VL pipeline, 668s).
+- New endpoints verified end-to-end against a live server: timeseries returns
+  `[]` on empty data (no fabrication), correctly day-groups two same-day events
+  into one point totalling 1500 impressions; brand-kit language round-trips;
+  ad copy honours tone; n8n status returns a valid status.
+- All 7 frontend routes return HTTP 200 with no dev-server errors; verified the
+  new language selector renders and the "Live Data" label is gone.
+- **Not verified:** no browser automation was available in this session, so the
+  UI was not interactively click-tested. Rendering and build correctness were
+  confirmed, but visual/interaction behaviour was not.
+
+## Still deferred
+
+- **SDXL fine-tuning / "Add DL"** — user-owned. When weights exist, integration
+  is a small change in `sdxl_service._do_load` to `pipe.load_lora_weights(...)`
+  if a LoRA file is present, plus adding `peft` to `requirements.txt`.
+  Note: GPU is a 6GB RTX 3050, `backend/ml/data/` is empty, and the DB holds only
+  33 posters / 3 evaluations — not a usable training set yet.
+- Structured `docs/` directory (architecture, API reference, deployment guide).
+- Frontend component/E2E tests (still none).
+
+---
+
+# Phase 3 — Platform Integrations, Analytics Tracking, Optimizer/Lead Review
+
+## 1. Platform integrations completed
+
+**Adapters** (`backend/app/services/posting/adapters.py`)
+- New `PostMetrics` type + `fetch_metrics()` on the adapter interface, implemented for all five adapters. Previously adapters could only write to a platform, never read back — analytics had no real source.
+- **Instagram**: now polls the media container until `status_code == FINISHED` before publishing (Meta ingests media asynchronously; publishing immediately fails with "Media ID is not available"). Also resolves the real `permalink` instead of guessing a URL from the media id.
+- **Facebook**: image posts now go to `/photos` with `url`. The old code passed the image as `link` on `/feed`, which renders a link preview, not the poster.
+- **LinkedIn**: implemented image posting (`registerUpload` → PUT bytes → `IMAGE` share). Was hardcoded `shareMediaCategory: NONE`, so posters were silently dropped. Falls back to text-only if upload fails rather than losing the post.
+- **Twitter**: tweepy calls moved off the event loop with `asyncio.to_thread` (they were blocking the whole server), plus media upload via API v1.1.
+- All adapters now return `PostResult(success=False, error=...)` with the platform's error body instead of raising a bare `raise_for_status()` whose message is just a status code.
+- `MockAdapter.fetch_metrics` is deterministic per post id and always flagged `is_mock`.
+
+**Service** (`posting_service.py`)
+- `_credentials_present()` — single source of truth for whether a platform is actually configured.
+- `sync_metrics()` / `sync_campaign_metrics()` — pull engagement into `AnalyticsEvent`, upserting on (campaign, platform, day) so re-syncing refreshes rather than duplicating chart points.
+- `publish_scheduled_due()` — **scheduled posts were never published**. `schedule()` parked rows in the `scheduled` state and the comment said "worker/n8n picks it up", but no worker existed. Now they get published once due.
+- `platform_status()` — reports `configured` separately from `healthy`, because the mock adapter always answers healthy and the UI was showing "Operational" for platforms with zero credentials.
+
+**Worker** (`worker.py`, new) — two lifespan-started loops: due-post publishing and periodic metrics sync. Gated by `SCHEDULER_ENABLED` / `SCHEDULER_INTERVAL_SECONDS` / `METRICS_SYNC_INTERVAL_SECONDS`.
+
+**Endpoints**: `GET /posting/integrations/status`, `POST /posting/metrics/sync/{campaign_id}`, `POST /posting/scheduled/run`.
+
+**Frontend**: posting studio shows Not configured / Operational / Credentials failing with a Mock badge, plus a Sync Engagement button.
+
+## 2. Analytics tracking
+
+- `AnalyticsEvent.is_mock` + `synced_at` added (migration `a1b2c3d4e5f6`), so the tab can say where numbers came from and how fresh they are.
+- `GET /analytics/engagement/timeseries` now takes `campaign_id`; window cutoff is a real `datetime` (a bare `date` only worked by accident on SQLite string comparison).
+- `GET /analytics/engagement/platforms` — per-platform totals; CTR recomputed from summed clicks/impressions rather than averaging per-day CTRs (which weights a 10-impression day equally with a 10,000-impression one).
+- `GET /analytics/tracking/status` — event count, published posts, mock count, last sync time.
+- Analytics page rebuilt: scope selector (all campaigns / one), 7/14/30/90 range, provenance line, Sync Engagement, and a per-platform performance table. `EngagementChart` now takes `days` / `campaignId` / `refreshKey` props.
+
+## 3. Strategy optimizer & lead scores — findings
+
+Two dead paths found while reading them (documented, not yet fixed):
+- `optimization.py` builds `platform_avg` from real analytics and passes it as `platform_history`, but `CampaignOptimizerService.optimize()` accepts the argument and never forwards it. The bandit never sees campaign data.
+- `record_result()` / `record_campaign_result()` / `bandit_service.record_reward()` have **no caller anywhere**. The Beta posteriors stay at the `(2,2)` prior forever, and are in-memory only so they reset on restart. `_PLATFORM_BASE_CTR` is defined and unused.
+
+Net effect: the optimizer's platform recommendation is currently a fair coin across four arms, and its "confidence" is sampling noise (~25-40%).
+
+## Tests
+- 26 fast tests passing (`pytest -m "not heavy"`, ~2.5 min); heavy SDXL test unchanged.
+- New: `test_integrations_status`, `test_metrics_sync`, `test_metrics_sync_missing_campaign`, `test_run_scheduled_posts`, `test_mock_metrics_are_deterministic`, `test_analytics_platform_breakdown`, `test_analytics_tracking_status`.
+- Frontend `npm run build` clean.

@@ -51,11 +51,10 @@ export default function DashboardPage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h2 className="text-lg font-semibold text-white">Engagement Overview</h2>
-            <p className="text-xs text-slate-500 mt-0.5">14-day campaign performance</p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              14-day campaign performance, aggregated across all campaigns
+            </p>
           </div>
-          <span className="text-xs text-slate-500 glass px-3 py-1 rounded-full border border-surface-border">
-            Live Data
-          </span>
         </div>
         <EngagementChart />
       </div>

@@ -107,8 +107,8 @@ class LSTMService(BaseModelService):
         self._model.eval()
 
     def _do_unload(self) -> None:
-        memory_manager.purge(self._model)
         self._model = self._scaler_mean = self._scaler_std = None
+        memory_manager.purge()
 
     def health_check(self) -> bool:
         try:

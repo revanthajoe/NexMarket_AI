@@ -4,6 +4,7 @@ Backend does ALL AI logic; n8n is purely the orchestrator.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -38,21 +39,22 @@ async def n8n_trigger_campaign(
         raise HTTPException(status_code=404, detail="Campaign not found")
 
     campaign.status = "generating"
+    # Commit before scheduling: the background task writes the final status on
+    # its own session, and this request's post-yield commit would otherwise land
+    # afterwards and clobber it back to "generating".
+    await db.commit()
 
-    async def run_pipeline(campaign_id: str, steps: list):
+    async def run_pipeline(campaign_id: str, steps: list, platforms: list | None):
         import logging
-        from sqlalchemy import text
         from app.db.session import AsyncSessionLocal
 
         log = logging.getLogger(__name__)
 
         # Use a completely independent session — NullPool guarantees no
-        # connection sharing with the request that spawned this task.
+        # connection sharing with the request that spawned this task. The SQLite
+        # pragmas are applied by the engine's connect listener, so this session
+        # gets WAL and the 30s busy timeout without asking.
         async with AsyncSessionLocal() as bg_db:
-            # Apply WAL pragmas to this connection as well
-            await bg_db.execute(text("PRAGMA journal_mode=WAL"))
-            await bg_db.execute(text("PRAGMA busy_timeout=5000"))
-
             try:
                 c = await bg_db.get(Campaign, campaign_id)
                 if not c:
@@ -86,7 +88,13 @@ async def n8n_trigger_campaign(
                             )
                             poster = Poster(campaign_id=c.id, **gen)
                             bg_db.add(poster)
-                            await bg_db.flush()
+                            # Commit, not flush: a flush opens the single SQLite
+                            # write transaction and holds it through every
+                            # remaining step — minutes of GPU time during which
+                            # no other request can write. One short transaction
+                            # per step instead, same convention as the poster
+                            # endpoint's commit-per-variation.
+                            await bg_db.commit()
                             await bg_db.refresh(poster)
                             results["poster_id"] = poster.id
                             log.info("pipeline_poster_done id=%s", poster.id)
@@ -99,12 +107,27 @@ async def n8n_trigger_campaign(
                         try:
                             poster_obj = await bg_db.get(Poster, results["poster_id"])
                             if poster_obj:
-                                raw = await poster_evaluator.evaluate(poster_obj.image_url)
+                                # Two stacked bugs lived here:
+                                #  1. evaluate() already returns the normalized,
+                                #     schema-ready dict. Calling normalize() on
+                                #     it again read sub-scores from a nested
+                                #     "dimensions" key it no longer has, zeroing
+                                #     every dimension.
+                                #  2. normalize() also returns "fallback", which
+                                #     is not a column, so PosterEvaluation(**norm)
+                                #     raised TypeError — swallowed by the except
+                                #     below, meaning this step never actually
+                                #     persisted an evaluation at all.
+                                # Build from the model's own columns instead.
                                 from app.models.models import PosterEvaluation
-                                norm = poster_evaluator.normalize(raw)
-                                ev = PosterEvaluation(poster_id=poster_obj.id, **norm)
+                                norm = await poster_evaluator.evaluate(poster_obj.image_url)
+                                columns = {c.name for c in PosterEvaluation.__table__.columns}
+                                ev = PosterEvaluation(
+                                    poster_id=poster_obj.id,
+                                    **{k: v for k, v in norm.items() if k in columns},
+                                )
                                 bg_db.add(ev)
-                                await bg_db.flush()
+                                await bg_db.commit()
                                 log.info("pipeline_evaluate_done poster_id=%s", poster_obj.id)
                         except Exception as exc:
                             log.error("pipeline_evaluate_failed: %s", exc, exc_info=True)
@@ -123,12 +146,14 @@ async def n8n_trigger_campaign(
                             platforms = (
                                 [c.preferred_platform]
                                 if c.preferred_platform != "all"
-                                else ["instagram", "facebook", "linkedin", "twitter"]
+                                else ["instagram", "facebook", "telegram", "whatsapp"]
                             )
+                            from app.services.ai.brand_kit import get_brand_kit
                             copies = await ad_copy_generator.generate(
                                 c.product_name, c.description, c.offer,
                                 c.target_audience, c.campaign_goal,
                                 platforms=platforms,
+                                language=get_brand_kit(c.id).language,
                             )
                             for platform, data in copies.items():
                                 ad = AdCopy(
@@ -140,7 +165,7 @@ async def n8n_trigger_campaign(
                                     hashtags=data.get("hashtags"),
                                 )
                                 bg_db.add(ad)
-                            await bg_db.flush()
+                            await bg_db.commit()
                             log.info("pipeline_adcopy_done count=%d", len(copies))
                         except Exception as exc:
                             log.error("pipeline_adcopy_failed: %s", exc, exc_info=True)
@@ -161,28 +186,35 @@ async def n8n_trigger_campaign(
                         raise
 
                 # ── Post ──────────────────────────────────────────────────
+                # Publishes to every platform in `platforms` independently —
+                # see SocialPostingService.publish_platforms(). This used to
+                # publish to exactly one platform (the optimizer's pick, or
+                # preferred_platform) and `raise` on failure, which propagated
+                # to the outer handler and marked the ENTIRE campaign "failed"
+                # even when poster/adcopy/evaluate/forecast/optimize had all
+                # succeeded. A platform failing now lives on its own
+                # SocialPost.status row, exactly like the standalone
+                # /posting/campaign/{id}/publish endpoint — this step must
+                # never raise for a publish failure.
                 if "post" in steps:
-                    try:
-                        target_platform = (
-                            results.get("optimization", {}).get("recommended_platform")
-                            or c.preferred_platform
-                        )
-                        sp = SocialPost(campaign_id=c.id, platform=target_platform, status="pending")
-                        bg_db.add(sp)
-                        await bg_db.flush()
-                        await bg_db.refresh(sp)
+                    target_platforms = platforms or (
+                        [results["optimization"]["recommended_platform"]]
+                        if results.get("optimization", {}).get("recommended_platform")
+                        else [c.preferred_platform]
+                    )
+                    posts = await social_posting_service.create_posts_for_platforms(
+                        bg_db, c.id, target_platforms,
+                        ad_copy_id=None, poster_id=results.get("poster_id"),
+                    )
 
-                        text_content = f"{c.product_name} — {c.offer}"
-                        image_url = None
-                        if results.get("poster_id"):
-                            poster_obj = await bg_db.get(Poster, results["poster_id"])
-                            image_url = poster_obj.image_url if poster_obj else None
+                    text_content = f"{c.product_name} — {c.offer}"
+                    image_url = None
+                    if results.get("poster_id"):
+                        poster_obj = await bg_db.get(Poster, results["poster_id"])
+                        image_url = poster_obj.image_url if poster_obj else None
 
-                        await social_posting_service.publish(bg_db, sp, text_content, image_url)
-                        log.info("pipeline_post_done platform=%s", target_platform)
-                    except Exception as exc:
-                        log.error("pipeline_post_failed: %s", exc, exc_info=True)
-                        raise
+                    await social_posting_service.publish_platforms(bg_db, posts, text_content, image_url)
+                    log.info("pipeline_post_done platforms=%s", target_platforms)
 
                 # ── Finalise ──────────────────────────────────────────────
                 c.status = "posted" if "post" in steps else "ready"
@@ -191,21 +223,32 @@ async def n8n_trigger_campaign(
 
             except Exception as exc:
                 log.error("pipeline_unhandled_error campaign_id=%s: %s", campaign_id, exc, exc_info=True)
+                # Rolls back only the step that failed — earlier steps committed
+                # on their own. That is deliberate: a poster that cost minutes of
+                # GPU time is kept even if ad copy later fails, and the campaign
+                # is still marked "failed" below so the UI stays accurate.
                 await bg_db.rollback()
                 # Mark campaign as failed so the UI can reflect it
                 async with AsyncSessionLocal() as err_db:
-                    await err_db.execute(text("PRAGMA busy_timeout=5000"))
                     failed_c = await err_db.get(Campaign, campaign_id)
                     if failed_c:
                         failed_c.status = "failed"
                         await err_db.commit()
 
-    background_tasks.add_task(run_pipeline, payload.campaign_id, payload.steps)
+    background_tasks.add_task(run_pipeline, payload.campaign_id, payload.steps, payload.platforms)
     return N8nWebhookResponse(
         status="accepted",
         message=f"Campaign pipeline started for {payload.campaign_id}",
         data={"steps": payload.steps},
     )
+
+
+# A pipeline that's still "generating" after this long didn't crash cleanly —
+# it was orphaned (e.g. the dev server restarted mid-task, which silently
+# kills the BackgroundTasks coroutine before it can mark the campaign
+# "failed"). Without this the frontend polls forever with nothing to make it
+# stop, since nothing else ever updates the row.
+STALE_GENERATING_TIMEOUT_SECONDS = 20 * 60
 
 
 @router.get("/status/{campaign_id}", response_model=Dict[str, Any])
@@ -214,6 +257,13 @@ async def n8n_campaign_status(campaign_id: str, db: AsyncSession = Depends(get_d
     campaign = await db.get(Campaign, campaign_id)
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
+
+    if campaign.status == "generating" and campaign.updated_at:
+        age = (datetime.utcnow() - campaign.updated_at).total_seconds()
+        if age > STALE_GENERATING_TIMEOUT_SECONDS:
+            campaign.status = "failed"
+            await db.commit()
+            await db.refresh(campaign)
 
     posts_r = await db.execute(
         select(SocialPost).where(SocialPost.campaign_id == campaign_id)
