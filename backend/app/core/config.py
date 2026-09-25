@@ -7,9 +7,8 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import List, Literal
 
-from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -62,18 +61,15 @@ class Settings(BaseSettings):
         return self.effective_database_url.startswith("sqlite+")
 
     # ── LLM ───────────────────────────────────────────────────────
-    LLM_PROVIDER: Literal["openai", "gemini", "local"] = "openai"
+    LLM_PROVIDER: Literal["openai", "local"] = "openai"
     LLM_MODEL: str = "gpt-4o"
     OPENAI_API_KEY: str = ""
-    GEMINI_API_KEY: str = ""
     LOCAL_LLM_BASE_URL: str = "http://localhost:11434/v1"
 
     # ── Image Generation ──────────────────────────────────────────
     # "local"  → SDXL background art + deterministic composer typesetting
-    # "gemini" → Gemini renders the complete poster, text included (no composer)
-    IMAGE_PROVIDER: Literal["openai", "stability", "mock", "local", "gemini"] = "mock"
+    IMAGE_PROVIDER: Literal["openai", "stability", "mock", "local"] = "mock"
     STABILITY_API_KEY: str = ""
-    GEMINI_IMAGE_MODEL: str = "gemini-2.5-flash-image"
 
     # ── Generative text/vision provider ───────────────────────────
     # Which models write marketing COPY and score posters: poster brochure copy,
@@ -83,30 +79,10 @@ class Settings(BaseSettings):
     # govern sentiment, lead scoring, forecasting and anything else, so flipping
     # this does not drag the whole system onto a cloud provider.
     #
-    # "gemini" exists because Qwen2.5-3B at 4-bit cannot produce usable
-    # non-English output. For posters it translated the brand name "Birla Opus
-    # Paints" into "பிறந்த உபோஸ் பின்னர்" ("Born Opus After"); for ad copy it
-    # fails to emit parseable JSON at all on Tamil and silently fell back to a
-    # hardcoded English template.
-    #
-    # Was POSTER_PHASE_PROVIDER while it only governed the poster phase; the old
-    # name is still read (see AI_TEXT_PROVIDER validator below) so existing .env
-    # files keep working.
-    AI_TEXT_PROVIDER: Literal["gemini", "local"] = "gemini"
-    POSTER_PHASE_PROVIDER: Optional[Literal["gemini", "local"]] = None
-    GEMINI_TEXT_MODEL: str = "gemini-3.5-flash"
-
-    @model_validator(mode="after")
-    def _honour_legacy_provider_name(self) -> "Settings":
-        # An existing .env that only sets the old name must keep working. Only
-        # applies when AI_TEXT_PROVIDER was left at its default, so an explicit
-        # new-name setting always wins.
-        if self.POSTER_PHASE_PROVIDER is not None and "AI_TEXT_PROVIDER" not in self.model_fields_set:
-            object.__setattr__(self, "AI_TEXT_PROVIDER", self.POSTER_PHASE_PROVIDER)
-        return self
+    AI_TEXT_PROVIDER: Literal["local"] = "local"
 
     # ── Vision LLM ────────────────────────────────────────────────
-    VISION_PROVIDER: Literal["openai", "gemini", "local"] = "openai"
+    VISION_PROVIDER: Literal["openai", "local"] = "openai"
     VISION_MODEL: str = "gpt-4o"
     LOCAL_VISION_BASE_URL: str = "http://localhost:11434/v1"
 

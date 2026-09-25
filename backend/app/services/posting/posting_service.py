@@ -147,6 +147,8 @@ class SocialPostingService:
                 social_post.platform_url = result.platform_url
                 social_post.posted_at = result.posted_at or datetime.utcnow()
                 social_post.is_mock = result.is_mock
+                social_post.source_type = "SIMULATED" if result.is_mock else "ACTUAL"
+                social_post.source_system = social_post.platform.upper()
                 social_post.response_payload = result.raw_response
                 social_post.retry_count = attempt - 1
                 await self._log(db, social_post.id, "posted", {"post_id": result.platform_post_id})
@@ -327,6 +329,9 @@ class SocialPostingService:
         event.reach = metrics.reach
         event.ctr = metrics.ctr
         event.is_mock = metrics.is_mock
+        event.source_type = "SIMULATED" if metrics.is_mock else "ACTUAL"
+        event.source_system = f"{social_post.platform}_adapter"
+        event.source_reference = social_post.platform_post_id
         event.synced_at = datetime.utcnow()
         if existing is None:
             db.add(event)

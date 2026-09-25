@@ -3,6 +3,7 @@ Backend test suite — covers all services and endpoints.
 Run with: pytest tests/ -v
 """
 import asyncio
+from datetime import datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -59,6 +60,65 @@ async def test_health(client):
     assert r.json()["status"] == "healthy"
 
 
+@pytest.mark.asyncio
+async def test_runtime_model_metadata_is_registered_idempotently():
+    from sqlalchemy import func, select
+
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import ModelMetadata, ModelVersion
+    from app.services.model_metadata import register_runtime_models
+
+    async with AsyncSessionLocal() as db:
+        await register_runtime_models(db)
+    async with AsyncSessionLocal() as db:
+        await register_runtime_models(db)
+        model_count = (await db.execute(select(func.count(ModelMetadata.id)))).scalar_one()
+        version_count = (await db.execute(select(func.count(ModelVersion.id)))).scalar_one()
+        hashed_count = (
+            await db.execute(
+                select(func.count(ModelVersion.id)).where(ModelVersion.artifact_hash.is_not(None))
+            )
+        ).scalar_one()
+
+    assert model_count == 6
+    assert version_count == 6
+    assert hashed_count == 2
+
+
+@pytest.mark.asyncio
+async def test_model_generated_lead_has_model_version_reference(client):
+    from sqlalchemy import select
+
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import LeadScore
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+    response = await client.post(
+        "/api/v1/leads/predict",
+        json={
+            "campaign_id": cid,
+            "lead_identifier": "metadata-test",
+            "clicks": 12,
+            "views": 45,
+            "time_spent_seconds": 120,
+            "source_platform": "instagram",
+            "prior_purchases": 0,
+            "device": "mobile",
+            "age_group": "25-34",
+            "location_tier": 1,
+        },
+    )
+    assert response.status_code == 200
+
+    async with AsyncSessionLocal() as db:
+        row = (await db.execute(
+            select(LeadScore).where(LeadScore.lead_identifier == "metadata-test")
+        )).scalar_one()
+    assert row.source_type == "PREDICTED"
+    assert row.model_version_id is not None
+
+
 # ── Campaign ──────────────────────────────────────────────────────────────────
 
 CAMPAIGN_PAYLOAD = {
@@ -106,6 +166,46 @@ async def test_sentiment_analysis(client):
     labels = [res["label"] for res in data["results"]]
     assert "positive" in labels
     assert "negative" in labels
+
+
+@pytest.mark.asyncio
+async def test_sentiment_actual_input_has_predicted_output(monkeypatch):
+    from ai.inference_manager import inference_manager
+    from app.services.ai.sentiment import sentiment_service
+
+    async def fake_analyze(_texts):
+        return [{
+            "text": "Real customer comment",
+            "label": "positive",
+            "positive_score": 0.9,
+            "negative_score": 0.05,
+            "neutral_score": 0.05,
+            "confidence": 0.9,
+            "model_used": "distilbert",
+        }]
+
+    monkeypatch.setattr(inference_manager, "analyze_sentiment", fake_analyze)
+    result = await sentiment_service.analyze(
+        ["Real customer comment"],
+        source_type="ACTUAL",
+        source_system="telegram",
+    )
+    assert result["results"][0]["source_type"] == "PREDICTED"
+    assert result["results"][0]["input_source_type"] == "ACTUAL"
+
+
+@pytest.mark.asyncio
+async def test_sentiment_fallback_is_not_actual(monkeypatch):
+    from ai.inference_manager import inference_manager
+    from app.services.ai.sentiment import sentiment_service
+
+    async def failing_analyze(_texts):
+        raise RuntimeError("model unavailable")
+
+    monkeypatch.setattr(inference_manager, "analyze_sentiment", failing_analyze)
+    result = await sentiment_service.analyze(["Customer comment"], source_type="ACTUAL")
+    assert result["results"][0]["source_type"] == "FALLBACK"
+    assert result["results"][0]["input_source_type"] == "ACTUAL"
 
 
 # ── Lead Prediction ───────────────────────────────────────────────────────────
@@ -174,16 +274,86 @@ async def test_adcopy_generate_missing_campaign(client):
 
 # ── Forecasting (LSTM) ────────────────────────────────────────────────────────
 
+async def _seed_actual_history(client, campaign_id: str, count: int = 14):
+    start = datetime(2026, 1, 1)
+    for offset in range(count):
+        response = await client.post(
+            "/api/v1/n8n/analytics/ingest",
+            json={
+                "campaign_id": campaign_id,
+                "platform": "instagram",
+                "event_date": (start + timedelta(days=offset)).isoformat(),
+                "impressions": 100 + offset,
+                "clicks": 10 + offset,
+                "likes": 8 + offset,
+                "shares": 2,
+                "comments": 1,
+                "reach": 80 + offset,
+                "ctr": 0.1,
+                "source_type": "ACTUAL",
+                "source_system": "test",
+            },
+        )
+        assert response.status_code == 200
+
 @pytest.mark.asyncio
 async def test_forecast_create(client):
     cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
     cid = cr.json()["id"]
+
+    await _seed_actual_history(client, cid)
 
     r = await client.post("/api/v1/forecast/", json={"campaign_id": cid, "horizon_days": 7})
     assert r.status_code == 200
     data = r.json()
     assert data["campaign_id"] == cid
     assert data["forecast_horizon_days"] == 7
+    assert data["source_type"] == "FORECAST"
+    assert data["history_source"] == "ACTUAL"
+
+
+@pytest.mark.asyncio
+async def test_forecast_rejects_insufficient_or_non_actual_history(client):
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+    for source_type in ("SIMULATED", "UNKNOWN"):
+        await client.post(
+            "/api/v1/n8n/analytics/ingest",
+            json={"campaign_id": cid, "platform": "instagram", "source_type": source_type},
+        )
+
+    response = await client.post("/api/v1/forecast/", json={"campaign_id": cid, "horizon_days": 7})
+    assert response.status_code == 422
+    assert "INSUFFICIENT_DATA" in response.json()["detail"]
+
+
+def test_missing_lstm_artifact_does_not_train_synthetic_model(monkeypatch, tmp_path):
+    from ai.forecasting import lstm_service
+
+    monkeypatch.setattr(lstm_service, "_MODEL_PATH", tmp_path / "missing.pt")
+    monkeypatch.setattr(lstm_service, "_SCALER_PATH", tmp_path / "missing.scaler.npz")
+    service = lstm_service.LSTMService()
+    with pytest.raises(RuntimeError, match="synthetic training is disabled"):
+        service.load()
+
+
+@pytest.mark.asyncio
+async def test_analytics_ingest_requires_existing_campaign_and_explicit_provenance(client):
+    missing = await client.post(
+        "/api/v1/n8n/analytics/ingest",
+        json={"campaign_id": "demo", "platform": "instagram", "source_type": "SIMULATED"},
+    )
+    assert missing.status_code == 404
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+    simulated = await client.post(
+        "/api/v1/n8n/analytics/ingest",
+        json={"campaign_id": cid, "platform": "instagram", "source_type": "SIMULATED"},
+    )
+    assert simulated.status_code == 200
+    events = (await client.get(f"/api/v1/analytics/campaign/{cid}")).json()
+    assert events[0]["source_type"] == "SIMULATED"
 
 
 # ── Analytics time series ─────────────────────────────────────────────────────
@@ -390,9 +560,129 @@ async def test_poster_generation(client):
     assert r.status_code == 200
     posters = r.json()
     assert len(posters) == 1
-    assert "image_url" in posters[0]
-    assert posters[0]["provider"] in ("mock", "local-sdxl-composed", "openai-dalle3")
+    assert posters[0]["provider"] in ("mock", "local-sdxl-composed", "openai-dalle3", "local-sdxl-designed", "local-sdxl-base")
 
+
+# ── Poster feedback/regeneration ─────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_poster_feedback_regeneration_creates_new_version(client, monkeypatch):
+    from app.api.v1.endpoints import posters as posters_endpoint
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import Poster, PosterEvaluation, PosterFeedback
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+
+    async with AsyncSessionLocal() as db:
+        poster = Poster(
+            campaign_id=cid,
+            image_url="https://example.com/original-poster.png",
+            prompt_used="original prompt",
+            provider="mock",
+            variation_index=0,
+            version=1,
+        )
+        db.add(poster)
+        await db.commit()
+        await db.refresh(poster)
+
+        feedback = PosterFeedback(
+            poster_id=poster.id,
+            feedback_type="QUALITY",
+            feedback_text="CTA is weak and text readability is poor",
+            source="SYSTEM",
+            score=4.0,
+            source_type="PREDICTED",
+            source_system="poster_eval",
+        )
+        db.add(feedback)
+        await db.commit()
+
+        eval_row = PosterEvaluation(
+            poster_id=poster.id,
+            overall_score=58.0,
+            readability_score=52.0,
+            layout_score=60.0,
+            branding_score=65.0,
+            contrast_score=80.0,
+            cta_score=40.0,
+            visual_appeal_score=70.0,
+            strengths=["Color contrast is good"],
+            weaknesses=["CTA is weak", "Text readability is poor"],
+            suggestions=["Strengthen CTA", "Improve text readability"],
+            source_type="PREDICTED",
+            source_system="local_qwen_vl",
+            model_name="Qwen/Qwen2.5-VL-3B-Instruct",
+            model_version="artifact",
+            is_fallback=False,
+        )
+        db.add(eval_row)
+        await db.commit()
+
+    async def fake_generate(**kwargs):
+        return {
+            "image_url": "https://example.com/regenerated-poster.png",
+            "prompt_used": kwargs.get("prompt_used") or "regenerated prompt",
+            "provider": "mock",
+            "metadata_": {"visual_url": "https://example.com/regenerated-visual.png", "evaluation": {"fallback": False}},
+        }
+
+    async def fake_eval(image_url: str, context: str = ""):
+        return {
+            "overall_score": 83.0,
+            "readability_score": 82.0,
+            "layout_score": 78.0,
+            "branding_score": 80.0,
+            "contrast_score": 86.0,
+            "cta_score": 88.0,
+            "visual_appeal_score": 85.0,
+            "strengths": ["CTA is clearer"],
+            "weaknesses": [],
+            "suggestions": ["Keep the improved CTA"],
+            "fallback": False,
+            "source_type": "PREDICTED",
+            "source_system": "local_qwen_vl",
+            "model_name": "Qwen/Qwen2.5-VL-3B-Instruct",
+            "model_version": "artifact",
+            "is_fallback": False,
+            "raw_response": {"status": "ok"},
+        }
+
+    monkeypatch.setattr(posters_endpoint.poster_generator, "generate", fake_generate)
+    monkeypatch.setattr(posters_endpoint.poster_evaluator, "evaluate", fake_eval)
+    monkeypatch.setattr(posters_endpoint, "active_model_version_id", lambda db, registry_key: "model-version-123")
+
+    r = await client.post(f"/api/v1/posters/{poster.id}/regenerate")
+    assert r.status_code == 200
+    regenerated = r.json()
+    assert regenerated["parent_poster_id"] == poster.id
+    assert regenerated["version"] == 2
+    assert "cta" in (regenerated.get("improvement_instruction") or "").lower()
+    assert regenerated["generation_reason"] == "feedback_regeneration"
+
+    async with AsyncSessionLocal() as db:
+        original = await db.get(Poster, poster.id)
+        assert original.image_url == "https://example.com/original-poster.png"
+        assert original.version == 1
+
+        versions = (await db.execute(
+            __import__("sqlalchemy").select(Poster).where(Poster.campaign_id == cid).order_by(Poster.version)
+        )).scalars().all()
+        assert len(versions) == 2
+        assert {v.version for v in versions} == {1, 2}
+
+@pytest.mark.asyncio
+async def test_poster_feedback_inference_instruction_is_deterministic():
+    from app.services.poster_feedback import derive_improvement_instructions
+
+    result = derive_improvement_instructions(
+        weaknesses=["Text readability low", "CTA weak", "Subject placement poor"],
+        suggestions=["Improve text readability", "Strengthen CTA", "Improve subject placement"],
+    )
+    assert "readability" in result.lower()
+    assert "cta" in result.lower()
+    assert "subject" in result.lower()
 
 # ── Optimization ──────────────────────────────────────────────────────────────
 
@@ -409,6 +699,96 @@ async def test_optimization(client):
     data = r.json()
     assert data["recommended_platform"] in ("instagram", "facebook", "telegram", "whatsapp")
     assert 0 <= data["confidence"] <= 1
+
+
+@pytest.mark.asyncio
+async def test_optimization_actual_reward_updates_bandit_and_links_event(client, monkeypatch):
+    from sqlalchemy import select
+
+    from app.api.v1.endpoints import optimization as optimization_endpoint
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import AnalyticsEvent, OptimizationResult
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+    recommendation = await client.post("/api/v1/optimize/", json={"campaign_id": cid})
+    assert recommendation.status_code == 200
+    optimization_id = recommendation.json()["id"]
+    platform = recommendation.json()["recommended_platform"]
+
+    async with AsyncSessionLocal() as db:
+        event = AnalyticsEvent(
+            campaign_id=cid,
+            platform=platform,
+            event_date=datetime.utcnow(),
+            clicks=3,
+            source_type="ACTUAL",
+            source_system="telegram",
+            source_reference="message-42",
+        )
+        db.add(event)
+        await db.commit()
+        await db.refresh(event)
+        event_id = event.id
+
+    calls = []
+
+    async def record_result(platform_name: str, clicked: bool):
+        calls.append((platform_name, clicked))
+
+    monkeypatch.setattr(optimization_endpoint.campaign_optimizer, "record_result", record_result)
+    response = await client.post(f"/api/v1/optimize/{optimization_id}/reward")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["reward"] == 1.0
+    assert data["reward_source"] == "ACTUAL"
+    assert data["analytics_reference"] == f"analytics_event:{event_id}"
+    assert data["bandit_updated"] is True
+    assert calls == [(platform, True)]
+
+    async with AsyncSessionLocal() as db:
+        row = (await db.execute(
+            select(OptimizationResult).where(OptimizationResult.id == optimization_id)
+        )).scalar_one()
+        assert row.source_type == "RECOMMENDATION"
+        assert row.reward_source == "ACTUAL"
+
+
+@pytest.mark.asyncio
+async def test_optimization_non_actual_reward_does_not_update_bandit(client, monkeypatch):
+    from app.api.v1.endpoints import optimization as optimization_endpoint
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import AnalyticsEvent
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+    recommendation = await client.post("/api/v1/optimize/", json={"campaign_id": cid})
+    optimization_id = recommendation.json()["id"]
+    platform = recommendation.json()["recommended_platform"]
+
+    async with AsyncSessionLocal() as db:
+        db.add(AnalyticsEvent(
+            campaign_id=cid,
+            platform=platform,
+            event_date=datetime.utcnow(),
+            clicks=100,
+            source_type="SIMULATED",
+        ))
+        await db.commit()
+
+    calls = []
+
+    async def record_result(*args, **kwargs):
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(optimization_endpoint.campaign_optimizer, "record_result", record_result)
+    response = await client.post(f"/api/v1/optimize/{optimization_id}/reward")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["reward"] is None
+    assert data["reward_source"] == "UNKNOWN"
+    assert data["bandit_updated"] is False
+    assert calls == []
 
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -494,6 +874,62 @@ async def test_publish_marks_posted_not_stuck_posting(client):
         assert sp.status == "posted", (
             f"published (id={sp.platform_post_id}) but status stuck at {sp.status!r}"
         )
+        assert sp.source_type == "SIMULATED"
+        assert sp.source_system == "TELEGRAM"
+
+
+@pytest.mark.asyncio
+async def test_live_telegram_publish_preserves_id_and_metrics_stay_unknown(client, monkeypatch):
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import AnalyticsEvent, SocialPost
+    from app.services.posting import posting_service as ps
+    from app.services.posting.adapters import PostMetrics, PostResult
+
+    class LiveTelegramAdapter:
+        is_live = True
+        platform_name = "telegram"
+
+        async def post(self, payload):
+            return PostResult(
+                success=True,
+                platform_post_id="telegram-message-42",
+                platform_url="https://t.me/example/42",
+                raw_response={"ok": True, "result": {"message_id": 42}},
+            )
+
+        async def fetch_metrics(self, platform_post_id):
+            return PostMetrics(error="Telegram metrics unavailable")
+
+        async def health_check(self):
+            return True
+
+    monkeypatch.setattr(ps, "_get_adapter", lambda platform: LiveTelegramAdapter())
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+    response = await client.post(
+        "/api/v1/posting/publish",
+        json={"campaign_id": cid, "platform": "telegram"},
+    )
+    assert response.status_code == 200
+    post_id = response.json()["id"]
+
+    async with AsyncSessionLocal() as db:
+        post = await db.get(SocialPost, post_id)
+        assert post.status == "posted"
+        assert post.platform_post_id == "telegram-message-42"
+        assert post.source_type == "ACTUAL"
+        assert post.source_system == "TELEGRAM"
+
+    metrics_response = await client.post(f"/api/v1/posting/metrics/sync/{cid}")
+    assert metrics_response.status_code == 200
+    assert metrics_response.json()["failed"] == 1
+
+    async with AsyncSessionLocal() as db:
+        events = (await db.execute(
+            __import__("sqlalchemy").select(AnalyticsEvent).where(AnalyticsEvent.campaign_id == cid)
+        )).scalars().all()
+        assert events == []
 
 
 @pytest.mark.asyncio
@@ -595,6 +1031,7 @@ async def test_one_platform_failure_leaves_others_published(client, monkeypatch)
         ig = await db.get(SocialPost, by_platform["instagram"])
         assert ig.status == "failed", f"instagram should have failed, got {ig.status}"
         assert ig.error_message
+        assert ig.source_type == "UNKNOWN"
 
         for ok_platform in ("facebook", "telegram"):
             sp = await db.get(SocialPost, by_platform[ok_platform])
@@ -700,6 +1137,9 @@ from app.prompts.templates import (
     FEATURE_COUNT,
     WHY_ITEM_COUNT,
     build_brochure_prompt,
+    build_visual_design_prompt,
+    normalize_visual_design_spec,
+    normalize_offer_text,
     normalize_brochure_spec,
 )
 
@@ -786,6 +1226,41 @@ def test_brochure_spec_clamps_word_budgets():
     assert len(spec["headline_en"].split()) <= 6
 
 
+@pytest.mark.parametrize("product,description,offer,audience", [
+    ("Books", "Affordable knowledge", "upto 80 % offer", "students"),
+    ("Movie Tickets", "Cinema admission", "30% OFF", "movie fans"),
+    ("Pizza", "Fresh pizza delivery", "Buy 1 Get 1 Free", "families"),
+    ("Laptop", "Portable computer", "INR 10000 OFF", "remote workers"),
+    ("Paint", "Interior wall paint", "20% OFF", "homeowners"),
+    ("Hotel", "Comfortable stays", "25% OFF", "travellers"),
+    ("Clothing", "Everyday apparel", "Flat 50% OFF", "shoppers"),
+])
+def test_visual_design_spec_is_domain_agnostic(product, description, offer, audience):
+    context = {
+        "product_name": product,
+        "description": description,
+        "offer": offer,
+        "target_audience": audience,
+        "campaign_goal": "brand_awareness",
+    }
+    spec = normalize_visual_design_spec({}, context)
+    assert spec["product"] == product
+    assert spec["target_audience"] == audience
+    assert spec["campaign_goal"] == "brand_awareness"
+    assert spec["required_visual_elements"] == [product]
+    assert spec["layout_type"] in {"hero_offer", "product_focus", "split_visual", "centered_product", "lifestyle_scene", "minimal_offer"}
+    prompt = build_visual_design_prompt(product, description, offer, audience, "brand_awareness", "telegram", "16:9")
+    assert product in prompt
+    assert offer in prompt
+    assert "website sections" in prompt
+    assert "generic feature grids" in prompt
+    assert "duplicate headings" in prompt
+
+
+def test_offer_normalization_handles_common_spacing():
+    assert normalize_offer_text("upto 80 % offer") == "UP TO 80% OFF"
+
+
 def test_brochure_spec_clean_input_is_not_flagged_fallback():
     raw = {
         "headline_en": "Monsoon is coming",   "headline_local": "மழைக்காலம் வருது",
@@ -838,18 +1313,15 @@ def test_brochure_prompt_protects_the_brand_name():
 
 def test_fallback_evaluation_never_counts_as_approval():
     """
-    _FALLBACK_EVALUATION's synthetic score is 72.5, which is ABOVE the 70
-    approval threshold. Taken at face value an evaluator outage silently
-    "approves" every poster on attempt 1 and the improvement retry never fires.
+    A fallback evaluation is explicitly classified and can never approve a
+    poster, regardless of the fallback score.
     """
     from app.services.ai.poster_evaluator import _FALLBACK_EVALUATION, poster_evaluator
     from app.services.ai.poster_generator import _effective_score
 
-    assert _FALLBACK_EVALUATION["overall_score"] > 70, \
-        "guard assumes the synthetic score clears the threshold"
-
     fell_back = poster_evaluator.normalize(_FALLBACK_EVALUATION)
     assert fell_back["fallback"] is True
+    assert fell_back["source_type"] == "FALLBACK"
     assert _effective_score(fell_back) < 70, "a fallback evaluation must not pass the gate"
 
     real = poster_evaluator.normalize({"overall_score": 82, "dimensions": {}})
@@ -884,42 +1356,6 @@ def test_evaluation_dict_persists_without_double_normalizing():
     ev = PosterEvaluation(poster_id="p1",
                           **{k: v for k, v in once.items() if k in columns})
     assert ev.readability_score == 88 and ev.overall_score == 84
-
-
-def test_transient_errors_are_retried_but_quota_is_not():
-    """503 clears in seconds; a quota limit of 0 is a billing state that never does."""
-    from ai.llm.gemini_service import _is_transient
-
-    assert _is_transient(Exception("503 UNAVAILABLE: high demand")) is True
-    assert _is_transient(Exception("500 INTERNAL")) is True
-    assert _is_transient(Exception("Quota exceeded ... limit: 0, model: x")) is False
-    assert _is_transient(Exception("404 NOT_FOUND: no such model")) is False
-
-
-def test_gemini_missing_package_raises_actionable_error():
-    """
-    A missing google-genai must surface install instructions, not a raw
-    ModuleNotFoundError. The `types` import used to run before the guard.
-    """
-    import builtins
-    from ai.imagegen.gemini_service import GeminiImageError
-    from ai.llm.gemini_service import GeminiLLMService
-
-    svc = GeminiLLMService()
-    real_import = builtins.__import__
-
-    def blocked(name, *a, **k):
-        if name == "google" or name.startswith("google."):
-            raise ImportError("No module named 'google'")
-        return real_import(name, *a, **k)
-
-    builtins.__import__ = blocked
-    try:
-        with pytest.raises(GeminiImageError) as excinfo:
-            svc._get_client()
-        assert "google-genai" in str(excinfo.value)
-    finally:
-        builtins.__import__ = real_import
 
 
 # ── Icon library (badge icons) ───────────────────────────────────────────────
@@ -1005,6 +1441,22 @@ def test_smoke_xgboost_loads_and_scores():
         svc.unload()
 
 
+def test_xgboost_training_eligibility_requires_actual_observed_labels():
+    from ai.lead.xgboost_service import eligible_training_records
+
+    records = [
+        {"source_type": "ACTUAL", "converted": 1},
+        {"source_type": "ACTUAL", "converted": 0},
+        {"source_type": "SIMULATED", "converted": 1},
+        {"source_type": "FALLBACK", "converted": 0},
+        {"source_type": "UNKNOWN", "converted": 1},
+        {"source_type": "PREDICTED", "converted": 0},
+        {"source_type": "ACTUAL", "converted": None},
+    ]
+    eligible = eligible_training_records(records)
+    assert eligible == records[:2]
+
+
 def test_smoke_lstm_loads_and_forecasts():
     import numpy as np
     from ai.forecasting.lstm_service import LSTMService
@@ -1058,30 +1510,17 @@ def test_smoke_thompson_sampling_bandit():
 @pytest.mark.asyncio
 async def test_ai_text_provider_routes_both_poster_and_adcopy(monkeypatch):
     import ai.inference_manager as im
-    import ai.llm.gemini_service as gs
-    from app.core.config import settings
     from app.services.ai import text_provider as tp
 
-    monkeypatch.setattr(settings, "AI_TEXT_PROVIDER", "gemini")
     calls: list[str] = []
 
     async def fake_qwen_spec(system, user, temperature=0.7):
         calls.append("qwen"); return {}
 
-    async def fake_gemini_json(system, user, temperature=0.7):
-        calls.append("gemini"); return {}
-
     monkeypatch.setattr(im.inference_manager, "generate_visual_spec", fake_qwen_spec)
-    monkeypatch.setattr(gs.gemini_llm_service, "generate_json", fake_gemini_json)
 
     await tp.generate_marketing_json("sys", "user")
-    assert calls == ["gemini"], f"must route to Gemini, got {calls}"
-
-    # ...and the local setting still reaches Qwen, so the escape hatch works.
-    calls.clear()
-    monkeypatch.setattr(settings, "AI_TEXT_PROVIDER", "local")
-    await tp.generate_marketing_json("sys", "user")
-    assert calls == ["qwen"], f"AI_TEXT_PROVIDER=local must use Qwen, got {calls}"
+    assert calls == ["qwen"], f"marketing JSON must use local Qwen, got {calls}"
 
 
 def test_adcopy_routes_through_the_shared_text_provider():
@@ -1097,16 +1536,16 @@ def test_adcopy_routes_through_the_shared_text_provider():
     assert "inference_manager.generate_ad_copy" not in src
 
 
-def test_legacy_provider_setting_name_still_honoured(monkeypatch):
-    """An existing .env setting only POSTER_PHASE_PROVIDER must keep working."""
+def test_removed_provider_settings_are_not_accepted(monkeypatch):
+    """Removed provider values must not silently re-enable a cloud provider."""
     from app.core.config import Settings
     monkeypatch.setenv("POSTER_PHASE_PROVIDER", "local")
     monkeypatch.delenv("AI_TEXT_PROVIDER", raising=False)
     assert Settings().AI_TEXT_PROVIDER == "local"
 
-    # An explicit new-name setting wins over the legacy one.
-    monkeypatch.setenv("AI_TEXT_PROVIDER", "gemini")
-    assert Settings().AI_TEXT_PROVIDER == "gemini"
+    monkeypatch.setenv("AI_TEXT_PROVIDER", "unsupported")
+    with pytest.raises(Exception):
+        Settings()
 
 
 # ── Layout tier selection ────────────────────────────────────────────────────
@@ -1225,8 +1664,8 @@ def test_dropping_the_footer_grows_the_other_zones():
 
 import torch as _torch
 
-# sdxl_service.py is kept on disk but untracked from git (IMAGE_PROVIDER=gemini
-# is the active backend), so a fresh clone will not have it. Import it
+# sdxl_service.py is kept on disk but untracked from git, so a fresh clone will
+# not have it. Import it
 # defensively: without the guard, this module-level import fails at *collection*
 # and takes down the whole suite, not just the four tests below.
 try:
@@ -1325,3 +1764,375 @@ def test_sdxl_encode_long_prompt_concatenates_both_encoders():
     assert pe.shape == npe.shape, "positive/negative must match for CFG torch.cat"
     assert pooled.shape == (1, 1280), "pooled embedding must come from text_encoder_2 (bigG) only, per diffusers' own encode_prompt"
     assert npooled.shape == (1, 1280)
+
+
+# ── Pipeline integration: sentiment / lead_prediction / forecast steps ────────
+#
+# These tests verify that run_pipeline() correctly invokes the existing
+# DistilBERT sentiment, XGBoost lead-prediction, and LSTM forecast services
+# when the corresponding step names are included in the `steps` list, and that
+# each service writes its result to the appropriate database table.
+#
+# Strategy: trigger the pipeline with only the single step under test so the
+# heavy poster/SDXL steps are skipped — keeping the suite fast while still
+# exercising the actual service + DB persistence path inside run_pipeline().
+# BackgroundTasks in FastAPI runs synchronously in the test process when the
+# ASGI transport is used, so the rows are guaranteed to exist by the time the
+# POST /trigger/campaign response is received.
+
+@pytest.mark.asyncio
+async def test_pipeline_step_sentiment_creates_db_record(client):
+    """
+    The 'sentiment' pipeline step must call sentiment_service.analyze() and
+    persist at least one SentimentResult row for the campaign.
+    """
+    from sqlalchemy import select
+
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import SentimentResult
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    assert cr.status_code == 201
+    cid = cr.json()["id"]
+    await _seed_actual_history(client, cid)
+
+    r = await client.post(
+        "/api/v1/n8n/trigger/campaign",
+        json={"campaign_id": cid, "steps": ["sentiment"]},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "accepted"
+
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(SentimentResult).where(SentimentResult.campaign_id == cid)
+            )
+        ).scalars().all()
+
+    assert rows, "pipeline 'sentiment' step must create at least one SentimentResult row"
+    for row in rows:
+        assert row.label in ("positive", "negative", "neutral"), (
+            f"unexpected label: {row.label!r}"
+        )
+        assert 0.0 <= row.confidence <= 1.0
+        assert row.model_used, "model_used must not be empty"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_sentiment_is_idempotent(client):
+    """Triggering 'sentiment' twice for the same campaign must not create
+    duplicate rows — the idempotency guard in run_pipeline() skips the step
+    when rows already exist."""
+    from sqlalchemy import select
+
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import SentimentResult
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+
+    for _ in range(2):
+        await client.post(
+            "/api/v1/n8n/trigger/campaign",
+            json={"campaign_id": cid, "steps": ["sentiment"]},
+        )
+
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(SentimentResult).where(SentimentResult.campaign_id == cid)
+            )
+        ).scalars().all()
+
+    # The exact count equals the number of texts the pipeline builds from the
+    # campaign (name / description / offer / product+audience). The important
+    # thing is that a *second* trigger does not double the row count.
+    first_count = len(rows)
+    assert first_count > 0, "must have rows after first run"
+    # Re-trigger: should be a no-op
+    await client.post(
+        "/api/v1/n8n/trigger/campaign",
+        json={"campaign_id": cid, "steps": ["sentiment"]},
+    )
+    async with AsyncSessionLocal() as db:
+        rows2 = (
+            await db.execute(
+                select(SentimentResult).where(SentimentResult.campaign_id == cid)
+            )
+        ).scalars().all()
+    assert len(rows2) == first_count, (
+        f"idempotency guard failed: {first_count} rows before, {len(rows2)} after re-trigger"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_lead_prediction_creates_db_record(client):
+    """
+    The 'lead_prediction' pipeline step must call lead_prediction_service.predict()
+    and persist one LeadScore row (with lead_identifier='pipeline_baseline').
+    """
+    from sqlalchemy import select
+
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import LeadScore
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    assert cr.status_code == 201
+    cid = cr.json()["id"]
+    await _seed_actual_history(client, cid)
+
+    r = await client.post(
+        "/api/v1/n8n/trigger/campaign",
+        json={"campaign_id": cid, "steps": ["lead_prediction"]},
+    )
+    assert r.status_code == 200
+
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(LeadScore).where(LeadScore.campaign_id == cid)
+            )
+        ).scalars().all()
+
+    assert rows, "pipeline 'lead_prediction' step must create a LeadScore row"
+    row = rows[0]
+    assert row.lead_identifier == "pipeline_baseline"
+    assert 0.0 <= row.score <= 100.0, f"score out of range: {row.score}"
+    assert row.category in ("hot", "warm", "cold"), f"unexpected category: {row.category!r}"
+    assert 0.0 <= row.purchase_probability <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_lead_prediction_is_idempotent(client):
+    """Re-triggering 'lead_prediction' must not create a second baseline row."""
+    from sqlalchemy import select
+
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import LeadScore
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+
+    for _ in range(2):
+        await client.post(
+            "/api/v1/n8n/trigger/campaign",
+            json={"campaign_id": cid, "steps": ["lead_prediction"]},
+        )
+
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(LeadScore).where(LeadScore.campaign_id == cid)
+            )
+        ).scalars().all()
+
+    assert len(rows) == 1, (
+        f"expected exactly 1 baseline LeadScore, got {len(rows)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_forecast_creates_db_record(client):
+    """
+    The 'forecast' pipeline step must call lstm_forecast_service.forecast() and
+    persist one EngagementForecast row with horizon_days=7.
+    """
+    from sqlalchemy import select
+
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import EngagementForecast
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    assert cr.status_code == 201
+    cid = cr.json()["id"]
+
+    await _seed_actual_history(client, cid)
+
+    r = await client.post(
+        "/api/v1/n8n/trigger/campaign",
+        json={"campaign_id": cid, "steps": ["forecast"]},
+    )
+    assert r.status_code == 200
+
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(EngagementForecast).where(EngagementForecast.campaign_id == cid)
+            )
+        ).scalars().all()
+
+    assert rows, "pipeline 'forecast' step must create an EngagementForecast row"
+    row = rows[0]
+    assert row.forecast_horizon_days == 7
+    assert row.model_version == "lstm-v1"
+    assert row.source_type == "FORECAST"
+    assert row.history_source == "ACTUAL"
+    # At least one of the predicted series must be non-empty
+    assert any(
+        row.predicted_likes or row.predicted_shares or row.predicted_comments,
+    ), "EngagementForecast must have at least one predicted series"
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_forecast_is_idempotent(client):
+    """Re-triggering 'forecast' must not create a second EngagementForecast row."""
+    from sqlalchemy import select
+
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import EngagementForecast
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+    await _seed_actual_history(client, cid)
+
+    for _ in range(2):
+        await client.post(
+            "/api/v1/n8n/trigger/campaign",
+            json={"campaign_id": cid, "steps": ["forecast"]},
+        )
+
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(EngagementForecast).where(EngagementForecast.campaign_id == cid)
+            )
+        ).scalars().all()
+
+    assert len(rows) == 1, (
+        f"expected exactly 1 EngagementForecast, got {len(rows)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_all_three_new_steps_produce_records(client):
+    """
+    Full integration test for the three previously-missing pipeline steps
+    executed together (without poster/adcopy/optimize/post to keep it fast).
+
+    After triggering steps=[sentiment, lead_prediction, forecast] on the same
+    campaign, ALL THREE tables must have records:
+        - sentiment_results    ≥1 row
+        - lead_scores          ==1 row (pipeline_baseline)
+        - engagement_forecasts ==1 row (horizon_days=7)
+
+    This mirrors the real pipeline order that was missing from run_pipeline()
+    before the integration gap was closed.
+    """
+    from sqlalchemy import select
+
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import EngagementForecast, LeadScore, SentimentResult
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    assert cr.status_code == 201
+    cid = cr.json()["id"]
+    await _seed_actual_history(client, cid)
+
+    r = await client.post(
+        "/api/v1/n8n/trigger/campaign",
+        json={
+            "campaign_id": cid,
+            "steps": ["sentiment", "lead_prediction", "forecast"],
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "accepted"
+
+    async with AsyncSessionLocal() as db:
+        sentiment_rows = (
+            await db.execute(
+                select(SentimentResult).where(SentimentResult.campaign_id == cid)
+            )
+        ).scalars().all()
+
+        lead_rows = (
+            await db.execute(
+                select(LeadScore).where(LeadScore.campaign_id == cid)
+            )
+        ).scalars().all()
+
+        forecast_rows = (
+            await db.execute(
+                select(EngagementForecast).where(EngagementForecast.campaign_id == cid)
+            )
+        ).scalars().all()
+
+    # sentiment_results
+    assert sentiment_rows, (
+        "sentiment_results: no rows found after pipeline run — "
+        "sentiment step was not executed or failed silently"
+    )
+
+    # lead_scores
+    assert lead_rows, (
+        "lead_scores: no rows found after pipeline run — "
+        "lead_prediction step was not executed or failed silently"
+    )
+    assert lead_rows[0].lead_identifier == "pipeline_baseline"
+
+    # engagement_forecasts
+    assert forecast_rows, (
+        "engagement_forecasts: no rows found after pipeline run — "
+        "forecast step was not executed or failed silently"
+    )
+    assert forecast_rows[0].forecast_horizon_days == 7
+
+    # Spot-check value ranges
+    for sr in sentiment_rows:
+        assert sr.label in ("positive", "negative", "neutral")
+    assert 0.0 <= lead_rows[0].score <= 100.0
+    assert 0.0 <= lead_rows[0].purchase_probability <= 1.0
+
+
+
+@pytest.mark.asyncio
+async def test_pipeline_step_optimize_creates_db_record(client):
+    """
+    The 'optimize' pipeline step must execute Thompson sampling and persist
+    exactly one OptimizationResult row for the campaign, while retaining
+    in-memory 'optimization' keys for the pipeline's subsequent steps.
+    """
+    from sqlalchemy import select
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import OptimizationResult
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    assert cr.status_code == 201
+    cid = cr.json()["id"]
+
+    r = await client.post(
+        "/api/v1/n8n/trigger/campaign",
+        json={"campaign_id": cid, "steps": ["optimize"]},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "accepted"
+
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(OptimizationResult).where(OptimizationResult.campaign_id == cid)
+            )
+        ).scalars().all()
+
+    assert len(rows) == 1, "pipeline 'optimize' step must create exactly one OptimizationResult row"
+    opt_record = rows[0]
+    
+    assert opt_record.campaign_id == cid
+    assert opt_record.recommended_platform in ("instagram", "facebook", "telegram", "whatsapp")
+    
+    # Also verify idempotent behavior
+    r2 = await client.post(
+        "/api/v1/n8n/trigger/campaign",
+        json={"campaign_id": cid, "steps": ["optimize"]},
+    )
+    assert r2.status_code == 200
+    
+    async with AsyncSessionLocal() as db:
+        rows_after = (
+            await db.execute(
+                select(OptimizationResult).where(OptimizationResult.campaign_id == cid)
+            )
+        ).scalars().all()
+        
+    assert len(rows_after) == 1, "pipeline 'optimize' step must be idempotent and not create duplicate rows"

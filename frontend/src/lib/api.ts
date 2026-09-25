@@ -206,11 +206,17 @@ export const api = {
   posters: {
     getByCampaign: (campaign_id: string) =>
       req<Poster[]>(`/posters/campaign/${campaign_id}`),
+    getEvaluations: (poster_id: string) =>
+      req<PosterEvaluation[]>(`/posters/${poster_id}/evaluations`),
+    getFeedback: (poster_id: string) =>
+      req<PosterFeedback[]>(`/posters/${poster_id}/feedback`),
     generate: (campaign_id: string, variations = 1, language?: string) =>
       req<Poster[]>("/posters/generate", {
         method: "POST",
         body: JSON.stringify({ campaign_id, variations, language }),
       }, AI_REQUEST_TIMEOUT_MS),
+    regenerate: (poster_id: string) =>
+      req<Poster>(`/posters/${poster_id}/regenerate`, { method: "POST" }, AI_REQUEST_TIMEOUT_MS),
     evaluate: (poster_id: string) =>
       req<PosterEvaluation>(`/posters/${poster_id}/evaluate`, { method: "POST" }, AI_REQUEST_TIMEOUT_MS),
   },
@@ -374,10 +380,14 @@ export interface CampaignCreate {
 export interface Poster {
   id: string;
   campaign_id: string;
+  parent_poster_id?: string;
   image_url: string;
   prompt_used?: string;
   provider: string;
   variation_index: number;
+  version: number;
+  generation_reason?: string;
+  improvement_instruction?: string;
   metadata_?: {
     visual_url?: string;
     [key: string]: any;
@@ -398,6 +408,23 @@ export interface PosterEvaluation {
   strengths: string[];
   weaknesses: string[];
   suggestions: string[];
+  source_type: string;
+  source_system?: string;
+  model_name?: string;
+  model_version?: string;
+  is_fallback?: boolean;
+  created_at: string;
+}
+
+export interface PosterFeedback {
+  id: string;
+  poster_id: string;
+  feedback_type: string;
+  feedback_text: string;
+  source: string;
+  score?: number;
+  source_type: string;
+  source_system?: string;
   created_at: string;
 }
 
@@ -413,6 +440,10 @@ export interface AdCopy {
   // True when generation failed (twice) and this is hardcoded English
   // placeholder copy, not a real result in the requested language.
   fallback?: boolean;
+  source_type?: string;
+  source_system?: string;
+  model_name?: string;
+  model_version?: string;
   created_at: string;
 }
 
@@ -479,6 +510,11 @@ export interface LeadScore {
   purchase_probability: number;
   category: string;
   feature_importance?: Record<string, number>;
+  source_type?: string;
+  source_system?: string;
+  model_name?: string;
+  model_version?: string;
+  is_fallback?: boolean;
 }
 
 export interface Forecast {
@@ -491,6 +527,10 @@ export interface Forecast {
   predicted_reach: number[];
   confidence_intervals?: Record<string, { lower: number[]; upper: number[] }>;
   model_version: string;
+  source_type?: string;
+  history_source?: string;
+  source_reference?: string;
+  is_fallback?: boolean;
   created_at: string;
 }
 
@@ -501,6 +541,11 @@ export interface Optimization {
   confidence: number;
   reasoning?: string;
   platform_scores?: Record<string, number>;
+  source_type?: string;
+  algorithm?: string;
+  policy_version?: string;
+  reward_source?: string;
+  analytics_reference?: string;
   created_at: string;
 }
 
@@ -540,6 +585,7 @@ export interface EngagementPoint {
   likes: number;
   reach: number;
   is_mock: boolean;
+  source_type?: string;
 }
 
 export interface PlatformBreakdown {
@@ -554,6 +600,7 @@ export interface PlatformBreakdown {
   ctr: number;
   engagement_rate: number;
   is_mock: boolean;
+  source_type?: string;
   last_synced_at: string | null;
 }
 

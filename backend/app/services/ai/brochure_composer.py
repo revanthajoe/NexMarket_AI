@@ -39,11 +39,34 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from dataclasses import dataclass
 from PIL import Image, ImageDraw
 
 from app.services.ai import text_shaper
 from app.services.ai.icon_library import draw_icon, pick_icon
 from app.services.ai.poster_composer import _hex_to_rgba, render_cta_pill
+
+@dataclass
+class PosterCreativeSpec:
+    campaign_objective: str
+    product_name: str
+    target_audience: str
+
+    brand_name: str
+    headline: str
+    subheadline: str
+    supporting_message: str
+    offer: str
+    cta: str
+
+    visual_subject: str
+    visual_style: str
+    composition_strategy: str
+
+    color_direction: str
+    platform: str
+    aspect_ratio: str
+    variation_index: int
 
 logger = logging.getLogger(__name__)
 
@@ -331,6 +354,9 @@ class BrochureComposer:
             except Exception as exc:
                 logger.warning("brochure_composer hero image paste failed: %s", exc)
 
+        if not spec.get("show_supporting_features", False):
+            return
+
         # Feature badges: 2 left, 2 right, each a filled circle with bilingual
         # label above a value string — mirrors the reference's "14 YEAR" /
         # "12°C COOLER" pairing.
@@ -554,7 +580,155 @@ class BrochureComposer:
 
     # ── Main compose ─────────────────────────────────────────────────────────
 
-    def compose(
+    def compose(self, *args, **kwargs) -> str:
+        """Route to legacy or dynamic composer based on spec type."""
+        spec = kwargs.get("spec") or (args[1] if len(args) > 1 else None)
+        if isinstance(spec, PosterCreativeSpec):
+            return self.compose_dynamic(
+                spec=kwargs.get("spec") or args[0],
+                base_image_path=kwargs.get("base_image_path") or args[1],
+                kit=kwargs.get("kit") or args[2],
+                output_path=kwargs.get("output_path") or args[3],
+                target_width=kwargs.get("target_width", 1080),
+                target_height=kwargs.get("target_height", 1080)
+            )
+        return self.compose_legacy(*args, **kwargs)
+
+    def compose_dynamic(
+        self,
+        spec: PosterCreativeSpec,
+        base_image_path: str,
+        kit,
+        output_path: str,
+        target_width: int = 1080,
+        target_height: int = 1080,
+    ) -> str:
+        """Modern dynamic marketing composition engine."""
+        try:
+            W, H = target_width, target_height
+            margin_x = int(W * 0.05)
+            
+            from app.services.ai.poster_composer import PosterComposer
+            with Image.open(base_image_path) as raw:
+                img = raw.convert("RGBA")
+            img = PosterComposer._cover_resize(img, W, H)
+            
+            # Product Cutout Overlay
+            if kit and kit.product_cutout_path:
+                try:
+                    with Image.open(kit.product_cutout_path) as raw_cutout:
+                        cutout = raw_cutout.convert("RGBA")
+                    # Scale cutout to ~60% of canvas
+                    target_cutout_h = int(H * 0.6)
+                    cutout_scale = target_cutout_h / cutout.height
+                    new_cw, new_ch = int(cutout.width * cutout_scale), target_cutout_h
+                    cutout = cutout.resize((new_cw, new_ch), Image.LANCZOS)
+                    # Center the cutout
+                    img.alpha_composite(cutout, ((W - new_cw) // 2, (H - new_ch) // 2))
+                except Exception as exc:
+                    logger.warning("Failed to paste product cutout: %s", exc)
+
+            overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(overlay)
+
+            # Gradient overlays for text contrast
+            if spec.composition_strategy in ["offer_focused", "hero_focused", "minimal"]:
+                grad_h = int(H * 0.45)
+                grad_y = H - grad_h
+                for row in range(grad_h):
+                    alpha = int(230 * (row / grad_h))
+                    draw.line([(0, grad_y + row), (W, grad_y + row)], fill=(10, 12, 18, alpha))
+                
+                # Top gradient for logo/brand
+                top_grad_h = int(H * 0.15)
+                for row in range(top_grad_h):
+                    alpha = int(180 * (1.0 - (row / top_grad_h)))
+                    draw.line([(0, row), (W, row)], fill=(10, 12, 18, alpha))
+            
+            elif spec.composition_strategy == "split_visual":
+                split_h = int(H * 0.35)
+                bg_color = _hex_to_rgba(spec.color_direction) if spec.color_direction and spec.color_direction.startswith('#') else (25, 28, 38, 240)
+                draw.rectangle([0, H - split_h, W, H], fill=bg_color)
+            
+            # Brand / Logo
+            if kit and kit.logo_path:
+                try:
+                    with Image.open(kit.logo_path) as raw_logo:
+                        logo = raw_logo.convert("RGBA")
+                    logo_w = min(int(W * 0.25), 250)
+                    logo_h = int(logo_w * logo.height / logo.width)
+                    logo = logo.resize((logo_w, logo_h), Image.LANCZOS)
+                    overlay.alpha_composite(logo, (margin_x, margin_x))
+                except Exception as e:
+                    logger.warning("Failed to paste logo: %s", e)
+            else:
+                brand_font = self._font_path(spec.brand_name, bold=True)
+                brand_img = text_shaper.render_text(spec.brand_name, brand_font, int(H * 0.035), (255, 255, 255, 255))
+                overlay.alpha_composite(brand_img, (margin_x, margin_x))
+
+            # Typography sizes
+            hl_size = int(H * 0.08) if spec.composition_strategy == "offer_focused" else int(H * 0.065)
+            offer_size = int(H * 0.045)
+
+            # Draw Headline with wrapping
+            hl_font = self._font_path(spec.headline, bold=True)
+            hl_y = H - int(H * 0.38) if spec.composition_strategy != "split_visual" else H - int(H * 0.32)
+            if spec.composition_strategy == "hero_focused":
+                hl_y = int(H * 0.12)
+                
+            # Quick text wrap implementation
+            words = spec.headline.upper().split()
+            lines = []
+            curr_line = ""
+            for word in words:
+                test_line = f"{curr_line} {word}".strip()
+                if text_shaper.measure_text(test_line, hl_font, hl_size)[0] < (W - margin_x * 2):
+                    curr_line = test_line
+                else:
+                    if curr_line: lines.append(curr_line)
+                    curr_line = word
+            if curr_line: lines.append(curr_line)
+            
+            current_y = hl_y
+            for line in lines:
+                line_img = text_shaper.render_text(line, hl_font, hl_size, (255, 255, 255, 255))
+                overlay.alpha_composite(line_img, (margin_x, current_y))
+                current_y += line_img.height + int(H * 0.01)
+            
+            # Draw Offer
+            offer_font = self._font_path(spec.offer, bold=False)
+            offer_y = current_y + int(H * 0.01)
+            offer_img = text_shaper.render_text(spec.offer, offer_font, offer_size, (240, 240, 240, 255))
+            overlay.alpha_composite(offer_img, (margin_x, offer_y))
+
+            # Draw CTA Pill
+            cta_y = offer_y + offer_img.height + int(H * 0.03)
+            cta_font = self._font_path(spec.cta, bold=True)
+            pill_color = _hex_to_rgba(spec.color_direction) if spec.color_direction and spec.color_direction.startswith('#') else (220, 40, 40, 255)
+            
+            cta_text = spec.cta.upper()
+            cta_text_size = int(H * 0.035)
+            cta_text_w, cta_text_h = text_shaper.measure_text(cta_text, cta_font, cta_text_size)
+            
+            pill_h = int(cta_text_h * 2.5)
+            pill_w = int(cta_text_w + pill_h * 1.5)
+            draw.rounded_rectangle([margin_x, cta_y, margin_x + pill_w, cta_y + pill_h], radius=int(pill_h*0.5), fill=pill_color)
+            
+            cta_img = text_shaper.render_text(cta_text, cta_font, cta_text_size, (255, 255, 255, 255))
+            overlay.alpha_composite(cta_img, (margin_x + (pill_w - cta_img.width)//2, cta_y + (pill_h - cta_img.height)//2))
+            
+            img.alpha_composite(overlay, (0, 0))
+            
+            out = img.convert("RGB")
+            out.save(output_path, format="PNG", optimize=True)
+            logger.info("brochure_composer composed DYNAMIC %s (%dx%d) layout=%s", output_path, W, H, spec.composition_strategy)
+            return output_path
+            
+        except Exception as exc:
+            logger.error("brochure_composer.compose_dynamic failed: %s", exc, exc_info=True)
+            raise
+
+    def compose_legacy(
         self,
         base_image_path: str,
         spec: dict,
@@ -582,23 +756,29 @@ class BrochureComposer:
         details; without them its height is redistributed across the remaining
         zones instead of leaving an empty dark strip.
 
-        `base_image_path` (the SDXL/Gemini backdrop) is no longer the dominant
+        `base_image_path` (the SDXL backdrop) is no longer the dominant
         visual: the headline+hero span is a deterministic color-blocked panel
         derived from `brand_color_hex`, with the backdrop blended in at low
         opacity purely as texture. A full-bleed "artsy" backdrop with only a
         light gradient over it (the previous approach) read as busy and
         competed with the badges/text — a clean panel reads as designed
         regardless of backdrop quality, which also matters while image
-        generation is running on the SDXL stopgap rather than Gemini.
+        generation is running on the SDXL background path.
         """
         try:
             W, H = target_width, target_height
             margin_x = int(W * 0.05)
 
-            # header/headline/hero/spec/offer always render — each degrades its
-            # own content rather than disappearing. Only the footer is optional,
-            # because a contact strip with nothing in it is worse than no strip.
-            present = {"header", "headline", "hero", "spec", "offer"}
+            layout_type = spec.get("layout_type", "hero_offer")
+            layout_zones = {
+                "hero_offer": {"header", "headline", "hero", "offer"},
+                "product_focus": {"header", "headline", "hero", "offer"},
+                "split_visual": {"header", "headline", "hero", "offer"},
+                "centered_product": {"header", "headline", "hero", "offer"},
+                "lifestyle_scene": {"header", "headline", "hero", "offer"},
+                "minimal_offer": {"header", "headline", "offer"},
+            }
+            present = set(layout_zones.get(layout_type, layout_zones["hero_offer"]))
             if kit is not None and getattr(kit, "has_contact_details", lambda: False)():
                 present.add("footer")
 
@@ -612,15 +792,17 @@ class BrochureComposer:
             img = Image.new("RGBA", (W, H), (255, 255, 255, 255))
             draw = ImageDraw.Draw(img)
 
-            panel_top    = boxes["headline"][1]
-            panel_bottom = boxes["hero"][3]
+            panel_top = boxes["headline"][1]
+            panel_bottom = boxes.get("hero", boxes["offer"])[3]
             self._paint_gradient_panel(img, 0, panel_top, W, panel_bottom, spec.get("brand_color_hex"))
             self._blend_subtle_texture(img, base_image_path, 0, panel_top, W, panel_bottom)
 
             self._zone_header(img, draw, boxes["header"], kit, brand_name)
             self._zone_headline(img, boxes["headline"], spec, margin_x)
-            self._zone_hero(img, boxes["hero"], kit, spec)
-            self._zone_spec(img, draw, boxes["spec"], spec, margin_x)
+            if "hero" in boxes:
+                self._zone_hero(img, boxes["hero"], kit, spec)
+            if "spec" in boxes:
+                self._zone_spec(img, draw, boxes["spec"], spec, margin_x)
             self._zone_offer(img, draw, boxes["offer"], spec, cta, margin_x)
             if "footer" in boxes:
                 self._zone_footer(img, draw, boxes["footer"], kit, margin_x)
@@ -676,7 +858,7 @@ class BrochureComposer:
         canvas: Image.Image, base_image_path: str, x0: int, y0: int, x1: int, y1: int, opacity: float = 0.10
     ) -> None:
         """
-        Blend the SDXL/Gemini backdrop into [x0,y0,x1,y1) at low, fixed opacity
+        Blend the SDXL backdrop into [x0,y0,x1,y1) at low, fixed opacity
         — texture, not a competing image. Desaturated first: a colorful/high-
         contrast backdrop (SDXL's abstract art in particular) still reads as
         busy at low opacity when its hue fights the panel's own color, because

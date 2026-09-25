@@ -71,10 +71,44 @@ class PosterGenerateRequest(BaseModel):
 class PosterRead(BaseModel):
     id: str
     campaign_id: str
+    parent_poster_id: Optional[str] = None
     image_url: str
     prompt_used: Optional[str]
     provider: str
     variation_index: int
+    version: int = 1
+    generation_reason: Optional[str] = None
+    improvement_instruction: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PosterFeedbackCreate(BaseModel):
+    feedback_type: str = Field(default="QUALITY", max_length=50)
+    feedback_text: str = Field(..., min_length=1)
+    source: str = Field(default="SYSTEM", max_length=50)
+    score: Optional[float] = Field(None, ge=0, le=100)
+    source_type: str = Field(default="UNKNOWN", max_length=20)
+    source_system: Optional[str] = None
+    model_name: Optional[str] = None
+    model_version: Optional[str] = None
+    model_version_id: Optional[str] = None
+    is_fallback: Optional[bool] = None
+
+
+class PosterFeedbackRead(BaseModel):
+    id: str
+    poster_id: str
+    feedback_type: str
+    feedback_text: str
+    source: str
+    score: Optional[float]
+    source_type: str
+    source_system: Optional[str]
+    model_name: Optional[str]
+    model_version: Optional[str]
+    is_fallback: Optional[bool]
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -95,6 +129,12 @@ class PosterEvaluationRead(BaseModel):
     strengths: Optional[List[str]]
     weaknesses: Optional[List[str]]
     suggestions: Optional[List[str]]
+    source_type: str
+    source_system: Optional[str]
+    model_name: Optional[str]
+    model_version: Optional[str]
+    is_fallback: Optional[bool]
+    model_version_id: Optional[str]
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -126,6 +166,11 @@ class AdCopyRead(BaseModel):
     # True when Qwen's output failed to parse as JSON and this row is the
     # hardcoded English placeholder rather than a real generation result.
     fallback: bool = False
+    source_type: str = "UNKNOWN"
+    source_system: Optional[str] = None
+    model_name: Optional[str] = None
+    model_version: Optional[str] = None
+    model_version_id: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -136,6 +181,9 @@ class AdCopyRead(BaseModel):
 class SentimentRequest(BaseModel):
     texts: List[str] = Field(..., min_length=1)
     campaign_id: Optional[str] = None
+    source_type: str = Field(default="UNKNOWN", max_length=20)
+    source_system: Optional[str] = None
+    source_reference: Optional[str] = None
 
 
 class SentimentResultRead(BaseModel):
@@ -146,6 +194,11 @@ class SentimentResultRead(BaseModel):
     neutral_score: float
     confidence: float
     model_used: str
+    source_type: str = "UNKNOWN"
+    input_source_type: str = "UNKNOWN"
+    source_system: Optional[str] = None
+    model_name: Optional[str] = None
+    model_version: Optional[str] = None
 
     model_config = {"protected_namespaces": ()}
 
@@ -175,6 +228,12 @@ class LeadScoreRead(BaseModel):
     purchase_probability: float
     category: str
     feature_importance: Optional[Dict[str, float]]
+    source_type: str = "UNKNOWN"
+    source_system: Optional[str] = None
+    model_name: Optional[str] = None
+    model_version: Optional[str] = None
+    is_fallback: Optional[bool] = None
+    model_version_id: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -196,6 +255,11 @@ class ForecastRead(BaseModel):
     predicted_reach: List[float]
     confidence_intervals: Optional[Dict[str, Any]]
     model_version: str
+    source_type: str = "UNKNOWN"
+    history_source: str = "UNKNOWN"
+    source_reference: Optional[str] = None
+    is_fallback: Optional[bool] = None
+    model_version_id: Optional[str] = None
     created_at: datetime
 
     model_config = {
@@ -212,12 +276,21 @@ class OptimizationRequest(BaseModel):
 
 
 class OptimizationRead(BaseModel):
+    id: Optional[str] = None
+    campaign_id: Optional[str] = None
     recommended_platform: str
     recommended_time: Optional[str]
     recommended_budget: Optional[float]
     confidence: float
     reasoning: Optional[str]
     platform_scores: Optional[Dict[str, float]]
+    source_type: str = "UNKNOWN"
+    algorithm: Optional[str] = None
+    policy_version: Optional[str] = None
+    reward_source: Optional[str] = None
+    analytics_reference: Optional[str] = None
+    reward: Optional[float] = None
+    bandit_updated: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -260,6 +333,8 @@ class PostStatusRead(BaseModel):
     retry_count: int
     error_message: Optional[str]
     is_mock: bool
+    source_type: str
+    source_system: Optional[str]
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -270,7 +345,21 @@ class PostStatusRead(BaseModel):
 class N8nTriggerCampaign(BaseModel):
     campaign_id: str
     steps: List[str] = Field(
-        default=["poster", "adcopy", "evaluate", "forecast", "optimize", "post"]
+        # Full pipeline order — each step only runs when its name is present.
+        # Logical dependency order:
+        #   poster  → evaluate (needs a poster to score)
+        #   adcopy  → sentiment (analyses the generated ad text)
+        #   lead_prediction → forecast → optimize → post
+        default=[
+            "poster",
+            "evaluate",
+            "adcopy",
+            "sentiment",
+            "lead_prediction",
+            "forecast",
+            "optimize",
+            "post",
+        ]
     )
     # Which platforms the "post" step publishes to. None (the default) falls
     # back to the campaign's own preferred_platform — existing callers,

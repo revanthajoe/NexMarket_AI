@@ -15,7 +15,14 @@ logger = get_logger(__name__)
 
 class SentimentService:
 
-    async def analyze(self, texts: List[str], campaign_id: str = None) -> dict:
+    async def analyze(
+        self,
+        texts: List[str],
+        campaign_id: str = None,
+        source_type: str = "UNKNOWN",
+        source_system: str = None,
+        source_reference: str = None,
+    ) -> dict:
         logger.info("sentiment_analyze n=%d", len(texts))
 
         try:
@@ -24,6 +31,17 @@ class SentimentService:
         except Exception as exc:
             logger.warning("sentiment_fallback error=%s", exc)
             results = [_keyword_fallback(t) for t in texts]
+
+        for result in results:
+            model_used = result.get("model_used", "unknown")
+            is_fallback = model_used == "keyword-fallback"
+            result["source_type"] = "FALLBACK" if is_fallback else "PREDICTED"
+            result["input_source_type"] = source_type
+            result["source_system"] = source_system or "customer_text"
+            result["source_reference"] = source_reference
+            result["model_name"] = "DistilBERT SST-2" if not is_fallback else None
+            result["model_version"] = model_used if not is_fallback else None
+            result["is_fallback"] = is_fallback
 
         summary = _summarize(results)
         return {"results": results, "summary": summary}

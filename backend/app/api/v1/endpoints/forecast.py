@@ -9,6 +9,7 @@ from app.db.session import get_db
 from app.models.models import AnalyticsEvent, Campaign, EngagementForecast
 from app.schemas.schemas import ForecastRead, ForecastRequest
 from app.services.ai.lstm_forecast import lstm_forecast_service
+from app.services.model_metadata import active_model_version_id
 
 router = APIRouter(prefix="/forecast", tags=["Engagement Forecasting"])
 
@@ -25,6 +26,7 @@ async def create_forecast(
     result = await db.execute(
         select(AnalyticsEvent)
         .where(AnalyticsEvent.campaign_id == payload.campaign_id)
+        .where(AnalyticsEvent.source_type == "ACTUAL")
         .order_by(AnalyticsEvent.event_date.asc())
     )
     events = result.scalars().all()
@@ -36,15 +38,20 @@ async def create_forecast(
             "comments": e.comments,
             "ctr": e.ctr,
             "reach": e.reach,
+            "source_type": e.source_type,
+            "event_date": e.event_date,
         }
         for e in events
     ]
 
-    forecast_data = await lstm_forecast_service.forecast(
-        campaign_id=payload.campaign_id,
-        analytics_rows=history,
-        horizon_days=payload.horizon_days,
-    )
+    try:
+        forecast_data = await lstm_forecast_service.forecast(
+            campaign_id=payload.campaign_id,
+            analytics_rows=history,
+            horizon_days=payload.horizon_days,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     record = EngagementForecast(
         campaign_id=payload.campaign_id,
@@ -55,7 +62,15 @@ async def create_forecast(
         predicted_ctr=forecast_data.get("predicted_ctr"),
         predicted_reach=forecast_data.get("predicted_reach"),
         confidence_intervals=forecast_data.get("confidence_intervals"),
-        model_version="v1",
+        model_version=forecast_data.get("model_version", "UNKNOWN"),
+        source_type=forecast_data.get("source_type", "UNKNOWN"),
+        history_source=forecast_data.get("history_source", "UNKNOWN"),
+        source_reference=f"analytics_events:{len(events)}",
+        is_fallback=forecast_data.get("is_fallback"),
+        model_version_id=(
+            await active_model_version_id(db, "lstm")
+            if forecast_data.get("source_type") == "FORECAST" else None
+        ),
     )
     db.add(record)
     await db.flush()

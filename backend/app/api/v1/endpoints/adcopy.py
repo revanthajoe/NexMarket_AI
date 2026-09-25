@@ -12,6 +12,7 @@ from app.models.models import AdCopy, Campaign
 from app.schemas.schemas import AdCopyGenerateRequest, AdCopyRead
 from app.services.ai.ad_generator import ad_copy_generator
 from app.services.ai.brand_kit import get_brand_kit
+from app.services.model_metadata import active_model_version_id
 
 router = APIRouter(prefix="/adcopy", tags=["Ad Copy"])
 
@@ -40,7 +41,9 @@ async def generate_ad_copy(
     )
 
     results = []
+    qwen_version_id = await active_model_version_id(db, "qwen_llm")
     for platform, data in copies.items():
+        is_fallback = data.get("fallback", False)
         ad = AdCopy(
             campaign_id=campaign.id,
             platform=platform,
@@ -49,7 +52,12 @@ async def generate_ad_copy(
             cta_variants=data.get("cta_variants", []),
             hashtags=data.get("hashtags", []),
             tone=payload.tone,
-            fallback=data.get("fallback", False),
+            fallback=is_fallback,
+            source_type="FALLBACK" if is_fallback else "PREDICTED",
+            source_system="template" if is_fallback else "local_qwen",
+            model_name=None if is_fallback else "Qwen/Qwen2.5-3B-Instruct",
+            model_version=None,
+            model_version_id=None if is_fallback else qwen_version_id,
         )
         db.add(ad)
         await db.flush()

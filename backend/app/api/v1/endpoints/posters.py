@@ -1,17 +1,21 @@
 """Poster generation + evaluation endpoints."""
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.models.models import Campaign, Poster, PosterEvaluation
-from app.schemas.schemas import PosterEvaluationRead, PosterGenerateRequest, PosterRead
+from app.models.models import Campaign, ModelVersion, Poster, PosterEvaluation, PosterFeedback
+from app.schemas.schemas import PosterEvaluationRead, PosterFeedbackCreate, PosterFeedbackRead, PosterGenerateRequest, PosterRead
 from app.services.ai.poster_evaluator import poster_evaluator
 from app.services.ai.poster_generator import poster_generator
+from app.services.model_metadata import active_model_version_id
+from app.services.poster_feedback import derive_improvement_instructions
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/posters", tags=["Posters"])
@@ -137,6 +141,10 @@ async def evaluate_poster(poster_id: str, db: AsyncSession = Depends(get_db)):
         )
         raise HTTPException(status_code=500, detail=f"Poster evaluation failed: {exc}")
 
+    model_version_id = None
+    if normalized.get("source_type") == "PREDICTED":
+        model_version_id = await active_model_version_id(db, "qwen_vl")
+
     evaluation = PosterEvaluation(
         poster_id=poster_id,
         overall_score=normalized["overall_score"],
@@ -150,6 +158,12 @@ async def evaluate_poster(poster_id: str, db: AsyncSession = Depends(get_db)):
         weaknesses=normalized["weaknesses"],
         suggestions=normalized["suggestions"],
         raw_response=normalized.get("raw_response", {}),
+        source_type=normalized.get("source_type", "UNKNOWN"),
+        source_system=normalized.get("source_system"),
+        model_name=normalized.get("model_name"),
+        model_version=normalized.get("model_version"),
+        is_fallback=normalized.get("is_fallback"),
+        model_version_id=model_version_id,
     )
     db.add(evaluation)
     await db.flush()
@@ -158,9 +172,159 @@ async def evaluate_poster(poster_id: str, db: AsyncSession = Depends(get_db)):
     return evaluation
 
 
+@router.get("/{poster_id}/feedback", response_model=List[PosterFeedbackRead])
+async def list_feedback(poster_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(PosterFeedback).where(PosterFeedback.poster_id == poster_id).order_by(PosterFeedback.created_at.desc())
+    )
+    return result.scalars().all()
+
+
+@router.post("/{poster_id}/feedback", response_model=PosterFeedbackRead)
+async def add_feedback(poster_id: str, payload: PosterFeedbackCreate, db: AsyncSession = Depends(get_db)):
+    poster = await db.get(Poster, poster_id)
+    if not poster:
+        raise HTTPException(status_code=404, detail="Poster not found")
+
+    feedback = PosterFeedback(
+        poster_id=poster_id,
+        feedback_type=payload.feedback_type,
+        feedback_text=payload.feedback_text,
+        source=payload.source,
+        score=payload.score,
+        source_type=payload.source_type,
+        source_system=payload.source_system,
+        model_name=payload.model_name,
+        model_version=payload.model_version,
+        is_fallback=payload.is_fallback,
+    )
+    db.add(feedback)
+    await db.commit()
+    await db.refresh(feedback)
+    return feedback
+
+
+@router.post("/{poster_id}/regenerate", response_model=PosterRead)
+async def regenerate_poster(poster_id: str, db: AsyncSession = Depends(get_db)):
+    source = await db.get(Poster, poster_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Poster not found")
+
+    latest = (await db.execute(
+        select(PosterEvaluation)
+        .where(PosterEvaluation.poster_id == poster_id)
+        .order_by(PosterEvaluation.created_at.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    feedback_rows = (await db.execute(
+        select(PosterFeedback)
+        .where(PosterFeedback.poster_id == poster_id)
+        .order_by(PosterFeedback.created_at.desc())
+    )).scalars().all()
+
+    weaknesses = []
+    suggestions = []
+    if latest:
+        weaknesses.extend(latest.weaknesses or [])
+        suggestions.extend(latest.suggestions or [])
+    for item in feedback_rows:
+        if item.feedback_text:
+            weaknesses.append(item.feedback_text)
+
+    improvement_instruction = derive_improvement_instructions(weaknesses=weaknesses, suggestions=suggestions)
+    if not improvement_instruction:
+        raise HTTPException(status_code=400, detail="Insufficient feedback for regeneration")
+
+    campaign = await db.get(Campaign, source.campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    try:
+        gen = await poster_generator.generate(
+            campaign_name=campaign.name,
+            product_name=campaign.product_name,
+            description=campaign.description,
+            offer=campaign.offer,
+            target_audience=campaign.target_audience,
+            campaign_goal=campaign.campaign_goal,
+            brand_style=campaign.brand_style,
+            variation=source.variation_index,
+            platform=campaign.preferred_platform or "instagram",
+            campaign_id=campaign.id,
+            language=(source.metadata_ or {}).get("language"),
+        )
+    except Exception as exc:
+        logger.error("poster_regenerate_error poster_id=%s error=%s", poster_id, exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Poster regeneration failed: {exc}")
+
+    if not gen or not gen.get("image_url"):
+        raise HTTPException(status_code=500, detail="Poster regeneration failed: no image returned")
+
+    next_version = (await db.execute(
+        select(Poster.version).where(Poster.campaign_id == source.campaign_id).order_by(Poster.version.desc()).limit(1)
+    )).scalar_one_or_none() or 0
+
+    regenerated = Poster(
+        campaign_id=source.campaign_id,
+        parent_poster_id=source.id,
+        image_url=gen["image_url"],
+        prompt_used=gen.get("prompt_used"),
+        provider=gen.get("provider", source.provider),
+        variation_index=source.variation_index,
+        version=next_version + 1,
+        generation_reason="feedback_regeneration",
+        improvement_instruction=improvement_instruction,
+        metadata_=gen.get("metadata_", {}),
+    )
+    db.add(regenerated)
+    await db.flush()
+    await db.refresh(regenerated)
+
+    try:
+        normalized = await poster_evaluator.evaluate(regenerated.image_url)
+        model_version_id = None
+        if normalized.get("source_type") == "PREDICTED":
+            candidate = active_model_version_id(db, "qwen_vl")
+            if inspect.isawaitable(candidate):
+                candidate = await candidate
+            if candidate is not None:
+                existing = await db.get(ModelVersion, candidate)
+                if existing is not None:
+                    model_version_id = candidate
+
+        evaluation = PosterEvaluation(
+            poster_id=regenerated.id,
+            overall_score=normalized["overall_score"],
+            readability_score=normalized["readability_score"],
+            layout_score=normalized["layout_score"],
+            branding_score=normalized["branding_score"],
+            contrast_score=normalized["contrast_score"],
+            cta_score=normalized["cta_score"],
+            visual_appeal_score=normalized["visual_appeal_score"],
+            strengths=normalized.get("strengths") or [],
+            weaknesses=normalized.get("weaknesses") or [],
+            suggestions=normalized.get("suggestions") or [],
+            raw_response=normalized.get("raw_response", {}),
+            source_type=normalized.get("source_type", "UNKNOWN"),
+            source_system=normalized.get("source_system"),
+            model_name=normalized.get("model_name"),
+            model_version=normalized.get("model_version"),
+            is_fallback=normalized.get("is_fallback"),
+            model_version_id=model_version_id,
+        )
+        db.add(evaluation)
+        await db.commit()
+        await db.refresh(regenerated)
+        logger.info("poster_regenerated poster_id=%s new_version=%s", source.id, regenerated.version)
+        return regenerated
+    except Exception as exc:
+        logger.error("poster_regenerate_eval_error poster_id=%s error=%s", source.id, exc, exc_info=True)
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Poster regeneration failed after generation: {exc}")
+
+
 @router.get("/{poster_id}/evaluations", response_model=List[PosterEvaluationRead])
 async def get_evaluations(poster_id: str, db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import select
     result = await db.execute(
         select(PosterEvaluation).where(PosterEvaluation.poster_id == poster_id)
     )

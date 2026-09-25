@@ -38,7 +38,7 @@ services:
     environment:
       - DATABASE_URL=postgresql+asyncpg://nexmarket:nexmarket@postgres:5432/nexmarket_db
       - SYNC_DATABASE_URL=postgresql://nexmarket:nexmarket@postgres:5432/nexmarket_db
-      - AI_TEXT_PROVIDER=${AI_TEXT_PROVIDER:-gemini}
+      - AI_TEXT_PROVIDER=${AI_TEXT_PROVIDER:-local}
       # Instagram/Facebook/WhatsApp fetch posted media server-side, so this
       # must be a publicly reachable URL (e.g. a domain in front of this
       # container, or an ngrok tunnel during testing) — a Docker-internal

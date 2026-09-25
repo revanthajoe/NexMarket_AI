@@ -46,7 +46,7 @@
         "method": "POST",
         "url": "http://localhost:8000/api/v1/n8n/trigger/campaign",
         "bodyType": "json",
-        "body": "={{ JSON.stringify({ campaign_id: $json.campaign_id, steps: ['poster','adcopy','evaluate','forecast','optimize','post'], platforms: $json.platforms }) }}",
+        "body": "={{ JSON.stringify({ campaign_id: $json.campaign_id, steps: ['poster','evaluate','adcopy','sentiment','lead_prediction','forecast','optimize','post'], platforms: $json.platforms }) }}",
         "options": {
           "response": {
             "response": {
@@ -95,8 +95,8 @@
           "string": [
             {
               "value1": "={{ $json.status }}",
-              "operation": "equal",
-              "value2": "posted"
+              "operation": "regex",
+              "value2": "^(posted|ready)$"
             }
           ]
         }
@@ -142,37 +142,43 @@
       }
     },
     {
-      "id": "10",
-      "name": "Schedule Analytics Ingest",
-      "type": "n8n-nodes-base.scheduleTrigger",
+      "id": "12",
+      "name": "Check If Failed",
+      "type": "n8n-nodes-base.if",
       "position": [
-        100,
-        600
+        1100,
+        500
       ],
       "parameters": {
-        "rule": {
-          "interval": [
+        "conditions": {
+          "string": [
             {
-              "field": "hours",
-              "intervalValue": 6
+              "value1": "={{ $json.status }}",
+              "operation": "equal",
+              "value2": "failed"
             }
           ]
         }
       }
     },
     {
-      "id": "11",
-      "name": "Ingest Demo Analytics",
-      "type": "n8n-nodes-base.httpRequest",
+      "id": "13",
+      "name": "Check Timeout",
+      "type": "n8n-nodes-base.if",
       "position": [
-        300,
-        600
+        1100,
+        700
       ],
       "parameters": {
-        "method": "POST",
-        "url": "http://localhost:8000/api/v1/n8n/analytics/ingest",
-        "bodyType": "json",
-        "body": "={{ JSON.stringify({ campaign_id: 'demo', platform: 'instagram', likes: Math.floor(Math.random()*500), clicks: Math.floor(Math.random()*100), impressions: Math.floor(Math.random()*5000), ctr: Math.random()*0.08 }) }}"
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $runIndex }}",
+              "operation": "largerEqual",
+              "value2": 24
+            }
+          ]
+        }
       }
     }
   ],
@@ -250,18 +256,43 @@
         ],
         [
           {
-            "node": "Respond Processing",
+            "node": "Check If Failed",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Schedule Analytics Ingest": {
+    "Check If Failed": {
       "main": [
         [
           {
-            "node": "Ingest Demo Analytics",
+            "node": "Error Handler",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check Timeout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Timeout": {
+      "main": [
+        [
+          {
+            "node": "Respond Processing",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait 5s",
             "type": "main",
             "index": 0
           }

@@ -17,9 +17,7 @@ Lifecycle:
 """
 from __future__ import annotations
 
-import json
 import logging
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -56,11 +54,10 @@ class XGBoostService(BaseModelService):
             self._booster = xgb.Booster()
             self._booster.load_model(str(_MODEL_PATH))
         else:
-            logger.info("xgboost no saved model — training on synthetic data")
-            self._booster = _train_synthetic()
-            _MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self._booster.save_model(str(_MODEL_PATH))
-            logger.info("xgboost model saved path=%s", _MODEL_PATH)
+            raise RuntimeError(
+                "INSUFFICIENT_DATA: no registered XGBoost artifact and no eligible "
+                "ACTUAL labeled conversion records are available"
+            )
 
     def _do_unload(self) -> None:
         self._booster = None
@@ -146,40 +143,13 @@ def _encode_features(
     ], dtype=np.float32)
 
 
-# ── Synthetic training ─────────────────────────────────────────────────────────
-
-def _train_synthetic(n: int = 2000) -> xgb.Booster:
-    rng = np.random.default_rng(42)
-
-    clicks     = rng.integers(0, 100, n)
-    views      = rng.integers(50, 5000, n)
-    time_spent = rng.integers(0, 600, n)
-    purchases  = rng.integers(0, 10, n)
-    platform   = rng.integers(0, len(_PLATFORMS), n)
-    device     = rng.integers(0, len(_DEVICES), n)
-    age_bin    = rng.integers(0, len(_AGE_GROUPS), n)
-    location   = rng.integers(1, 4, n)
-    ctr        = clicks / np.maximum(views, 1)
-    eng_ratio  = (clicks + time_spent / 60) / np.maximum(views, 1)
-
-    X = np.column_stack([
-        clicks, views, time_spent, purchases,
-        ctr, eng_ratio, location, age_bin, device, platform,
-    ]).astype(np.float32)
-
-    # Label: high engagement + purchases → hot lead
-    y = ((ctr > 0.05) & (time_spent > 120) | (purchases > 2)).astype(np.float32)
-
-    dtrain = xgb.DMatrix(X, label=y, feature_names=_FEATURE_NAMES)
-    params = {
-        "objective":  "binary:logistic",
-        "max_depth":  5,
-        "eta":        0.1,
-        "subsample":  0.8,
-        "eval_metric":"logloss",
-        "verbosity":  0,
-        "nthread":    os.cpu_count() or 4,
-    }
-    booster = xgb.train(params, dtrain, num_boost_round=120)
-    logger.info("xgboost synthetic training complete n=%d", n)
-    return booster
+def eligible_training_records(records: list[dict]) -> list[dict]:
+    """Keep only actual observed conversion labels for production training."""
+    eligible = []
+    for record in records:
+        if record.get("source_type") != "ACTUAL":
+            continue
+        label = record.get("converted")
+        if isinstance(label, bool) or label in (0, 1):
+            eligible.append(record)
+    return eligible

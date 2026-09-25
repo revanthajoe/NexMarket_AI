@@ -95,6 +95,9 @@ export default function OptimizationPage() {
             </div>
           ) : (
             <div className="space-y-6 animate-scale-up">
+              <div className="text-xs uppercase tracking-wide text-amber-300">
+                {result.source_type || "UNKNOWN"} · {result.algorithm || "policy unavailable"}
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-brand-500/10 border border-brand-500/20 rounded-xl p-4">
                   <div className="text-xs text-brand-400 uppercase tracking-wide mb-1">Recommended Platform</div>

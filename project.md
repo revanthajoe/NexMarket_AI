@@ -62,7 +62,7 @@ NexMarket AI addresses this problem by bringing these activities together into o
                          Campaign Context
                                   |
                                   v
-                         Qwen2.5-3B Instruct
+                         Qwen2.5-3B Instruct (Local)
                                   |
                                   v
                   Structured Visual Specification
@@ -87,7 +87,7 @@ NexMarket AI addresses this problem by bringing these activities together into o
                                   Final Marketing Poster
                                           |
                                           v
-                                  Qwen2.5-VL-3B
+                                  Qwen2.5-VL-3B (Local)
                                           |
                                           v
                               Poster Quality Evaluation
@@ -148,7 +148,8 @@ The system does not ask the diffusion model to render exact marketing text. Inst
 
 ### Module 3: Advertisement Generator
 
-Qwen2.5-3B Instruct generates channel-specific marketing copy such as:
+The local Qwen2.5-3B Instruct model generates channel-specific marketing copy
+without requiring a cloud API key, such as:
 
 - Instagram caption
 - Facebook advertisement
@@ -172,7 +173,10 @@ The composition engine controls text wrapping, font size, safe margins, alignmen
 
 ### Module 5: Poster Evaluation
 
-Qwen2.5-VL-3B evaluates the final composed poster together with the campaign context.
+The local Qwen2.5-VL-3B model evaluates the final composed poster together with
+the campaign context. When local inference is unavailable, the application
+retains its deterministic evaluation fallback rather than calling a cloud
+provider.
 
 The evaluator checks:
 
@@ -342,7 +346,7 @@ n8n performs orchestration; AI inference remains inside the FastAPI AI services.
 
 ### Frontend
 
-- Next.js 15
+- Next.js 14
 - React.js
 - TypeScript
 - Tailwind CSS
@@ -358,7 +362,8 @@ n8n performs orchestration; AI inference remains inside the FastAPI AI services.
 
 ### Database
 
-- PostgreSQL
+- SQLite with the async development fallback
+- PostgreSQL for Docker and production deployments
 
 ### Workflow Automation
 
@@ -400,8 +405,8 @@ n8n performs orchestration; AI inference remains inside the FastAPI AI services.
 | Module | Model | Main Purpose |
 |---|---|---|
 | Poster Generation | Stable Diffusion XL | Generate campaign visuals |
-| Advertisement Generation | Qwen2.5-3B Instruct | Generate marketing copy |
-| Poster Evaluation | Qwen2.5-VL-3B | Evaluate final poster in context |
+| Advertisement Generation | Local Qwen2.5-3B Instruct | Generate marketing copy |
+| Poster Evaluation | Local Qwen2.5-VL-3B | Evaluate final poster in context |
 | Sentiment Analysis | DistilBERT | Classify customer sentiment |
 | Lead Prediction | XGBoost | Predict conversion likelihood |
 | Engagement Forecasting | PyTorch LSTM | Forecast future engagement |
@@ -415,12 +420,15 @@ n8n performs orchestration; AI inference remains inside the FastAPI AI services.
 
 Generative models are used to create new marketing assets from campaign information.
 
-- Text generation using Qwen2.5-3B Instruct
+- Text generation using local Qwen2.5-3B Instruct
 - Image generation using Stable Diffusion XL
 
 ### 9.2 Vision-Language Evaluation
 
-Qwen2.5-VL compares the generated poster with the supplied campaign context and produces structured evaluation results.
+Local Qwen2.5-VL compares the generated poster with the supplied campaign
+context and produces structured evaluation results. If local evaluation fails,
+the backend returns a marked fallback result so the failure is not presented as
+an approved AI evaluation.
 
 ### 9.3 Transformer-Based Sentiment Classification
 
@@ -461,8 +469,8 @@ The target development hardware is a consumer laptop with an RTX 3050 Laptop GPU
 
 To make local inference practical:
 
-- Qwen2.5-3B uses 4-bit NF4 quantization.
-- Qwen2.5-VL-3B uses 4-bit NF4 quantization where supported.
+- Local Qwen2.5-3B uses 4-bit NF4 quantization.
+- Local Qwen2.5-VL-3B uses 4-bit NF4 quantization where supported.
 - Stable Diffusion XL uses FP16 and memory-saving techniques rather than 4-bit transformer quantization.
 - Large models are loaded lazily.
 - Only the required model is kept on the GPU during large-model inference.
@@ -776,7 +784,7 @@ A fully completed NexMarket AI implementation should demonstrate:
 - Working LSTM engagement forecasting
 - Working campaign optimization
 - Automatic or demonstrably simulated social media publishing
-- Working PostgreSQL persistence
+- Working SQLite development persistence and PostgreSQL persistence for Docker/production
 - Working n8n orchestration
 - Dynamic model loading/unloading
 - 4-bit quantized transformer inference

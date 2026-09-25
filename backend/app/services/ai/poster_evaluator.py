@@ -1,16 +1,11 @@
 """
 app/services/ai/poster_evaluator.py
 ─────────────────────────────────────
-Adapter: routes poster evaluation to Gemini, or to
-InferenceManager → ModelManager → QwenVLService when AI_TEXT_PROVIDER=local.
+Adapter: routes poster evaluation to the local Qwen-VL inference manager.
 
 Normalises the raw evaluation dict into the standard schema
 expected by the API endpoint and ORM model.
 
-Gemini is the default because the poster phase runs on it end to end, and
-because it scores honestly: on a poster with garbled Tamil it returned 25/100
-and named the specific mistranslations, where a vaguer score would have sailed
-past the 70 approval threshold and skipped the improvement retry entirely.
 """
 from __future__ import annotations
 
@@ -23,10 +18,10 @@ from app.prompts.templates import VISION_EVALUATION_SYSTEM_PROMPT, VISION_EVALUA
 logger = get_logger(__name__)
 
 _FALLBACK_EVALUATION = {
-    "overall_score":      72.5,
+    "overall_score":      0.0,
     "dimensions": {
-        "readability":   78,
-        "layout":        70,
+        "readability":   0,
+        "layout":        0,
         "branding":      68,
         "contrast":      82,
         "cta_visibility":75,
@@ -56,16 +51,10 @@ class PosterEvaluatorService:
             )
             user_prompt = build_vision_evaluation_prompt(context)
 
-            if provider == "gemini":
-                from ai.llm.gemini_service import gemini_llm_service
-                raw = await gemini_llm_service.evaluate_image(
-                    image_url, VISION_EVALUATION_SYSTEM_PROMPT, user_prompt,
-                )
-            else:
-                from ai.inference_manager import inference_manager
-                raw = await inference_manager.evaluate_poster(
-                    image_url, VISION_EVALUATION_SYSTEM_PROMPT, user_prompt,
-                )
+            from ai.inference_manager import inference_manager
+            raw = await inference_manager.evaluate_poster(
+                image_url, VISION_EVALUATION_SYSTEM_PROMPT, user_prompt,
+            )
             if raw:
                 return self.normalize(raw)
         except Exception as exc:
@@ -76,8 +65,16 @@ class PosterEvaluatorService:
     def normalize(self, raw: dict) -> dict:
         """Flatten raw dict into the schema expected by the ORM."""
         dims = raw.get("dimensions", {})
+        issues = raw.get("issues", [])
+        recommendations = raw.get("recommendations", [])
         return {
             "overall_score":       raw.get("overall_score", 0),
+            "product_relevance_score": dims.get("product_relevance", raw.get("product_relevance", 0)),
+            "campaign_relevance_score": dims.get("campaign_relevance", raw.get("campaign_relevance", 0)),
+            "audience_relevance_score": dims.get("audience_relevance", raw.get("audience_relevance", 0)),
+            "visual_quality_score": dims.get("visual_quality", raw.get("visual_quality", 0)),
+            "composition_quality_score": dims.get("composition_quality", raw.get("composition_quality", 0)),
+            "marketing_quality_score": dims.get("marketing_quality", raw.get("marketing_quality", 0)),
             "readability_score":   dims.get("readability", 0),
             "layout_score":        dims.get("layout", 0),
             "branding_score":      dims.get("branding", 0),
@@ -87,7 +84,16 @@ class PosterEvaluatorService:
             "strengths":           raw.get("strengths", []),
             "weaknesses":          raw.get("weaknesses", []),
             "suggestions":         raw.get("suggestions", []),
+            "generic_template_detected": bool(raw.get("generic_template_detected", False)),
+            "duplicate_content_detected": bool(raw.get("duplicate_content_detected", False)),
+            "issues":              issues if isinstance(issues, list) else [],
+            "recommendations":     recommendations if isinstance(recommendations, list) else [],
             "fallback":            bool(raw.get("fallback", False)),
+            "source_type":          "FALLBACK" if raw.get("fallback", False) else "PREDICTED",
+            "source_system":        "local_qwen_vl",
+            "model_name":           None if raw.get("fallback", False) else "Qwen/Qwen2.5-VL-3B-Instruct",
+            "model_version":        None,
+            "is_fallback":          bool(raw.get("fallback", False)),
             "raw_response":        raw,
         }
 

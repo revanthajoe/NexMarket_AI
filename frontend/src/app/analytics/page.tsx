@@ -221,7 +221,7 @@ export default function AnalyticsPage() {
             <div className="space-y-4">
               <ForecastLineChart forecast={forecast} />
               <div className="flex justify-between items-center text-xs text-slate-500 pt-2 border-t border-surface-border">
-                <span>Model: {forecast.model_version}</span>
+                <span>Model: {forecast.model_version} · {forecast.source_type || "UNKNOWN"} · history: {forecast.history_source || "UNKNOWN"}</span>
                 <span>Horizon: {forecast.forecast_horizon_days} Days</span>
               </div>
             </div>

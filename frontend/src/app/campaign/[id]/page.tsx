@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import {
   api, invalidateCache, PIPELINE_STEPS, LANGUAGES,
-  Campaign, Poster, PosterEvaluation, AdCopy,
+  Campaign, Poster, PosterEvaluation, PosterFeedback, AdCopy,
   SocialPost, Forecast, Optimization, BrandKitInfo,
 } from "@/lib/api";
 import { AdCopyTab, PostingTab } from "@/components/campaign/CampaignTabs";
@@ -61,6 +61,7 @@ export default function CampaignDetailPage() {
   const [campaign, setCampaign]       = useState<Campaign | null>(null);
   const [posters, setPosters]         = useState<Poster[]>([]);
   const [eval_, setEval]              = useState<PosterEvaluation | null>(null);
+  const [feedback, setFeedback]       = useState<PosterFeedback[]>([]);
   const [copies, setCopies]           = useState<AdCopy[]>([]);
   const [posts, setPosts]             = useState<SocialPost[]>([]);
   const [forecast, setForecast]       = useState<Forecast | null>(null);
@@ -68,6 +69,7 @@ export default function CampaignDetailPage() {
   const [tab, setTab]                 = useState<TabId>("overview");
   const [loading, setLoading]         = useState(true);
   const [actionLoading, setActionLoading] = useState("");
+  const [regeneratingPosterId, setRegeneratingPosterId] = useState<string | null>(null);
   const [pipelineStatus, setPipelineStatus] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -80,6 +82,15 @@ export default function CampaignDetailPage() {
         api.posting.getBycampaign(id).catch(() => [] as SocialPost[]),
       ]);
       setCampaign(c); setPosters(ps); setCopies(ads); setPosts(sps);
+      const latestPoster = ps[ps.length - 1];
+      if (latestPoster) {
+        const [evaluations, posterFeedback] = await Promise.all([
+          api.posters.getEvaluations(latestPoster.id).catch(() => [] as PosterEvaluation[]),
+          api.posters.getFeedback(latestPoster.id).catch(() => [] as PosterFeedback[]),
+        ]);
+        setEval(evaluations[evaluations.length - 1] ?? null);
+        setFeedback(posterFeedback);
+      }
     } catch {
       toast.error("Failed to load campaign");
     } finally {
@@ -234,7 +245,7 @@ export default function CampaignDetailPage() {
         {tab === "overview" && <OverviewTab campaign={campaign} copies={copies} posts={posts} />}
       {tab === "poster" && (
         <PosterTab
-          posters={posters} eval_={eval_} campaignId={id}
+          posters={posters} eval_={eval_} feedback={feedback} campaignId={id}
           onGenerate={(language: string) => runAction("Poster Generation", async () => {
             const p = await api.posters.generate(id, 2, language);
             setPosters(p);
@@ -248,6 +259,27 @@ export default function CampaignDetailPage() {
             }
           })}
           loading={actionLoading === "Poster Generation"}
+          onRegenerate={async (posterId: string) => {
+            setRegeneratingPosterId(posterId);
+            setActionLoading("Poster Regeneration");
+            try {
+              const regenerated = await api.posters.regenerate(posterId);
+              setPosters(prev => [...prev, regenerated]);
+              const [evaluations, posterFeedback] = await Promise.all([
+                api.posters.getEvaluations(regenerated.id),
+                api.posters.getFeedback(regenerated.id),
+              ]);
+              setEval(evaluations[evaluations.length - 1] ?? null);
+              setFeedback(posterFeedback);
+              toast.success(`Poster version ${regenerated.version} generated`);
+            } catch (err: unknown) {
+              toast.error(`Poster regeneration failed: ${err instanceof Error ? err.message : String(err)}`);
+            } finally {
+              setRegeneratingPosterId(null);
+              setActionLoading("");
+            }
+          }}
+          regeneratingPosterId={regeneratingPosterId}
         />
       )}
       {tab === "adcopy" && (
@@ -342,9 +374,11 @@ function OverviewTab({ campaign, copies, posts }: {
   );
 }
 
-function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
-  posters: Poster[]; eval_: PosterEvaluation | null; campaignId: string;
-  onGenerate: (language: string) => void; loading: boolean;
+function PosterTab({ posters, eval_, feedback, campaignId, onGenerate, onRegenerate, loading, regeneratingPosterId }: {
+  posters: Poster[]; eval_: PosterEvaluation | null; feedback: PosterFeedback[]; campaignId: string;
+  onGenerate: (language: string) => void;
+  onRegenerate: (posterId: string) => Promise<void>;
+  loading: boolean; regeneratingPosterId: string | null;
 }) {
   const [lightbox, setLightbox]   = useState<string | null>(null);
   const [brandKit, setBrandKit]   = useState<BrandKitInfo | null>(null);
@@ -592,6 +626,10 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
         <div className="space-y-6">
           {posters.map((p, i) => (
             <div key={p.id} className="glass-dynamic rounded-xl overflow-hidden p-4 animate-fade-in-up" style={{ animationDelay: `${i * 100}ms` }}>
+              <div className="mb-3 flex items-center justify-between">
+                <span className="text-xs font-semibold text-brand-300">Version {p.version}</span>
+                {p.parent_poster_id && <span className="text-[10px] text-slate-500">Regenerated from feedback</span>}
+              </div>
               <div className="flex flex-col md:flex-row gap-4 items-center">
                 {p.metadata_?.visual_url && (
                   <div className="flex-1 space-y-2 w-full">
@@ -646,10 +684,23 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
                   </div>
                 </div>
               </div>
-              <div className="mt-4 pt-3 border-t border-surface-border flex justify-between items-center">
+              <div className="mt-4 pt-3 border-t border-surface-border flex justify-between items-center gap-3">
                 <p className="text-xs text-slate-400 font-medium">Variation {p.variation_index + 1}</p>
-                <p className="text-[10px] text-slate-500 font-mono">Provider: {p.provider} {p.metadata_?.attempts ? `| Attempts: ${p.metadata_.attempts}` : ''}</p>
+                <div className="flex items-center gap-3">
+                  <p className="text-[10px] text-slate-500 font-mono">Provider: {p.provider} {p.metadata_?.attempts ? `| Attempts: ${p.metadata_.attempts}` : ''}</p>
+                  <button
+                    onClick={() => onRegenerate(p.id)}
+                    disabled={!!regeneratingPosterId}
+                    className="text-xs text-brand-300 hover:text-brand-200 flex items-center gap-1 disabled:opacity-50"
+                  >
+                    {regeneratingPosterId === p.id ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                    Regenerate
+                  </button>
+                </div>
               </div>
+              {p.improvement_instruction && (
+                <p className="mt-3 text-xs text-amber-300/80">Improvement: {p.improvement_instruction}</p>
+              )}
             </div>
           ))}
         </div>
@@ -676,6 +727,19 @@ function PosterTab({ posters, eval_, campaignId, onGenerate, loading }: {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+      {feedback.length > 0 && (
+        <div className="glass-dynamic rounded-xl p-6 mt-6 animate-fade-in-up">
+          <h3 className="text-sm font-semibold text-brand-400 mb-3">Available Feedback</h3>
+          <div className="space-y-2">
+            {feedback.map(item => (
+              <div key={item.id} className="flex justify-between gap-3 text-xs">
+                <span className="text-slate-300">{item.feedback_text}</span>
+                <span className="text-slate-500 shrink-0">{item.source_type}</span>
+              </div>
+            ))}
           </div>
         </div>
       )}

@@ -17,7 +17,7 @@ Model auto-trains on synthetic data if not saved.
 Saved as pure PyTorch state_dict (.pt) — no TensorFlow dependency.
 
 Lifecycle:
-  load()    → load state_dict or train synthetic
+    load()    → load state_dict and scaler
   forecast()→ normalise → iterative rollout → denormalise → return
   unload()  → delete model, purge
 """
@@ -46,10 +46,6 @@ _SEQ_LEN    = 14    # input window length (days)
 _N_FEATURES = 5     # likes, shares, comments, ctr, reach
 _HIDDEN1    = 64
 _HIDDEN2    = 32
-_EPOCHS     = 25
-_LR         = 1e-3
-
-
 # ── Model definition ──────────────────────────────────────────────────────────
 
 class _EngagementLSTM(nn.Module):
@@ -96,12 +92,10 @@ class LSTMService(BaseModelService):
             self._scaler_mean = scaler["mean"]
             self._scaler_std  = scaler["std"]
         else:
-            logger.info("lstm no saved model — training synthetic")
-            self._model, self._scaler_mean, self._scaler_std = _train_synthetic()
-            _MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(self._model.state_dict(), str(_MODEL_PATH))
-            np.savez(str(_SCALER_PATH), mean=self._scaler_mean, std=self._scaler_std)
-            logger.info("lstm saved path=%s", _MODEL_PATH)
+            raise RuntimeError(
+                "INSUFFICIENT_DATA: LSTM artifact and scaler are required; "
+                "synthetic training is disabled"
+            )
 
         self._model = self._model.to(device_manager.torch_device)
         self._model.eval()
@@ -112,7 +106,7 @@ class LSTMService(BaseModelService):
 
     def health_check(self) -> bool:
         try:
-            dummy = np.random.rand(_SEQ_LEN, _N_FEATURES)
+            dummy = np.zeros((_SEQ_LEN, _N_FEATURES), dtype=np.float32)
             result = self.forecast(dummy, horizon_days=2)
             return "predicted_likes" in result
         except Exception:
@@ -129,9 +123,7 @@ class LSTMService(BaseModelService):
         Returns dict of horizon-length lists for each metric.
         """
         if history.shape[0] < _SEQ_LEN:
-            # Pad with zeros
-            pad    = np.zeros((_SEQ_LEN - history.shape[0], _N_FEATURES))
-            history = np.vstack([pad, history])
+            raise ValueError("INSUFFICIENT_DATA: at least 14 actual observations are required")
 
         # Use the last SEQ_LEN rows
         window = history[-_SEQ_LEN:].copy().astype(np.float32)
@@ -180,59 +172,3 @@ class LSTMService(BaseModelService):
         }
 
 
-# ── Synthetic training ─────────────────────────────────────────────────────────
-
-def _train_synthetic(
-    n_series: int = 400,
-) -> tuple[_EngagementLSTM, np.ndarray, np.ndarray]:
-    rng = np.random.default_rng(0)
-
-    # Build synthetic time-series: n_series × (SEQ_LEN+1) × N_FEATURES
-    all_x, all_y = [], []
-    for _ in range(n_series):
-        base   = rng.uniform(50, 500, _N_FEATURES)
-        trend  = rng.uniform(-5, 10,  _N_FEATURES)
-        noise  = rng.uniform(0.05, 0.2, _N_FEATURES)
-        series = [base + i * trend + rng.normal(0, base * noise) for i in range(_SEQ_LEN + 1)]
-        series = np.clip(np.array(series), 0, None).astype(np.float32)
-        series[:, 3] = np.clip(series[:, 3] / series[:, 3].max(), 0, 1)   # ctr
-        all_x.append(series[:_SEQ_LEN])
-        all_y.append(series[_SEQ_LEN])
-
-    X = np.array(all_x)   # (n, SEQ_LEN, 5)
-    y = np.array(all_y)   # (n, 5)
-
-    # Fit scaler
-    flat          = X.reshape(-1, _N_FEATURES)
-    scaler_mean   = flat.mean(axis=0)
-    scaler_std    = flat.std(axis=0)
-    std_safe      = np.where(scaler_std == 0, 1.0, scaler_std)
-
-    X_n = (X - scaler_mean) / std_safe
-    y_n = (y - scaler_mean) / std_safe
-
-    X_t = torch.tensor(X_n, dtype=torch.float32)
-    y_t = torch.tensor(y_n, dtype=torch.float32)
-
-    model     = _EngagementLSTM()
-    optimiser = torch.optim.Adam(model.parameters(), lr=_LR)
-    criterion = nn.MSELoss()
-
-    ds     = torch.utils.data.TensorDataset(X_t, y_t)
-    loader = torch.utils.data.DataLoader(ds, batch_size=64, shuffle=True)
-
-    model.train()
-    for epoch in range(_EPOCHS):
-        total = 0.0
-        for xb, yb in loader:
-            optimiser.zero_grad()
-            loss = criterion(model(xb), yb)
-            loss.backward()
-            optimiser.step()
-            total += loss.item()
-        if (epoch + 1) % 5 == 0:
-            logger.debug("lstm epoch=%d loss=%.4f", epoch + 1, total / len(loader))
-
-    model.eval()
-    logger.info("lstm synthetic training done n_series=%d epochs=%d", n_series, _EPOCHS)
-    return model, scaler_mean, scaler_std

@@ -7,6 +7,7 @@ Handles history normalization from DB analytics records.
 from __future__ import annotations
 
 import logging
+import math
 from typing import List
 
 import numpy as np
@@ -31,24 +32,34 @@ class LSTMForecastService:
         logger.info("lstm_forecast campaign=%s horizon=%d rows=%d",
                     campaign_id, horizon_days, len(analytics_rows))
 
-        history = _rows_to_array(analytics_rows)
+        eligible_rows = [row for row in analytics_rows if row.get("source_type") == "ACTUAL"]
+        if len(eligible_rows) < 14:
+            raise ValueError(
+                "INSUFFICIENT_DATA: forecast requires at least 14 ACTUAL analytics observations"
+            )
+        _validate_history(eligible_rows)
+        history = _rows_to_array(eligible_rows)
 
         try:
             from ai.inference_manager import inference_manager
             result = await inference_manager.forecast_engagement(history, horizon_days)
             result["campaign_id"] = campaign_id
+            result.update({
+                "source_type": "FORECAST",
+                "history_source": "ACTUAL",
+                "source_system": "lstm",
+                "is_fallback": False,
+            })
             return result
         except Exception as exc:
-            logger.warning("lstm_forecast_fallback error=%s", exc)
-            return _linear_fallback(history, horizon_days, campaign_id)
+            logger.error("lstm_forecast_unavailable error=%s", exc, exc_info=True)
+            raise ValueError("UNAVAILABLE: LSTM forecast model is unavailable") from exc
 
 
 def _rows_to_array(rows: list) -> np.ndarray:
     """Convert list of analytics row dicts to (T, 5) ndarray."""
     if not rows:
-        # Return 14 days of random demo data
-        rng = np.random.default_rng(0)
-        return rng.uniform(50, 500, (14, 5)).astype(np.float32)
+        return np.empty((0, 5), dtype=np.float32)
 
     cols = ["likes", "shares", "comments", "ctr", "reach"]
     arr  = np.array(
@@ -58,28 +69,18 @@ def _rows_to_array(rows: list) -> np.ndarray:
     return arr
 
 
-def _linear_fallback(history: np.ndarray, horizon: int, campaign_id: str) -> dict:
-    """Simple linear extrapolation fallback."""
-    if len(history) >= 2:
-        trend = history[-1] - history[-2]
-    else:
-        trend = np.zeros(5)
-    last = history[-1] if len(history) > 0 else np.zeros(5)
-
-    preds = np.array([last + trend * (i + 1) for i in range(horizon)])
-    preds = np.clip(preds, 0, None)
-    preds[:, 3] = np.clip(preds[:, 3], 0, 1)
-
-    return {
-        "campaign_id":        campaign_id,
-        "predicted_likes":    preds[:, 0].tolist(),
-        "predicted_shares":   preds[:, 1].tolist(),
-        "predicted_comments": preds[:, 2].tolist(),
-        "predicted_ctr":      preds[:, 3].tolist(),
-        "predicted_reach":    preds[:, 4].tolist(),
-        "confidence_intervals": {},
-        "model_version":      "linear-fallback",
-    }
+def _validate_history(rows: list[dict]) -> None:
+    previous_timestamp = None
+    for row in rows:
+        timestamp = row.get("event_date")
+        if timestamp is not None:
+            if previous_timestamp is not None and timestamp <= previous_timestamp:
+                raise ValueError("INVALID_HISTORY: analytics observations must be chronological and unique")
+            previous_timestamp = timestamp
+        for metric in ("likes", "shares", "comments", "ctr", "reach"):
+            value = row.get(metric)
+            if not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+                raise ValueError(f"INVALID_HISTORY: {metric} must be numeric")
 
 
 lstm_forecast_service = LSTMForecastService()

@@ -28,6 +28,8 @@ class CampaignOptimizerService:
         from ai.inference_manager import inference_manager
         result = await inference_manager.optimize_campaign(campaign_goal, budget, target_audience)
         result["campaign_id"] = campaign_id
+        result.setdefault("policy_version", "bandit-v1")
+        result.setdefault("reward_source", "UNKNOWN")
         return result
 
     async def record_result(self, platform: str, clicked: bool) -> None:

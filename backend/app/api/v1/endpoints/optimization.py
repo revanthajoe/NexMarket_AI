@@ -23,7 +23,9 @@ async def optimize_campaign(
 
     # Build platform history from analytics
     result = await db.execute(
-        select(AnalyticsEvent).where(AnalyticsEvent.campaign_id == payload.campaign_id)
+        select(AnalyticsEvent)
+        .where(AnalyticsEvent.campaign_id == payload.campaign_id)
+        .where(AnalyticsEvent.source_type == "ACTUAL")
     )
     events = result.scalars().all()
 
@@ -56,8 +58,54 @@ async def optimize_campaign(
         confidence=opt.get("confidence", 0),
         reasoning=opt.get("reasoning"),
         platform_scores=opt.get("platform_scores"),
+        source_type="RECOMMENDATION",
+        algorithm="Thompson Sampling",
+        policy_version=opt.get("policy_version"),
+        reward_source=opt.get("reward_source", "UNKNOWN"),
+        analytics_reference=None,
+        reward=None,
+        bandit_updated=False,
     )
     db.add(record)
     await db.flush()
+    await db.refresh(record)
+    return record
+
+
+@router.post("/{optimization_id}/reward", response_model=OptimizationRead)
+async def sync_optimization_reward(
+    optimization_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update Thompson Sampling only from a matching ACTUAL analytics event."""
+    record = await db.get(OptimizationResult, optimization_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Optimization result not found")
+    if record.bandit_updated:
+        return record
+
+    event = (await db.execute(
+        select(AnalyticsEvent)
+        .where(AnalyticsEvent.campaign_id == record.campaign_id)
+        .where(AnalyticsEvent.platform == record.recommended_platform)
+        .where(AnalyticsEvent.source_type == "ACTUAL")
+        .order_by(AnalyticsEvent.event_date.desc())
+        .limit(1)
+    )).scalar_one_or_none()
+    if event is None:
+        record.reward_source = "UNKNOWN"
+        record.reward = None
+        record.analytics_reference = None
+        await db.commit()
+        await db.refresh(record)
+        return record
+
+    reward = 1.0 if event.clicks > 0 else 0.0
+    await campaign_optimizer.record_result(record.recommended_platform, clicked=reward > 0)
+    record.reward = reward
+    record.reward_source = "ACTUAL"
+    record.analytics_reference = f"analytics_event:{event.id}"
+    record.bandit_updated = True
+    await db.commit()
     await db.refresh(record)
     return record

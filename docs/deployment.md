@@ -35,7 +35,7 @@ the compose file itself; it gets committed.
 Non-secret provider switches are set directly in the compose file's
 `environment:` block with safe defaults, overridable via shell env vars:
 
-- `AI_TEXT_PROVIDER` (default `gemini`)
+- `AI_TEXT_PROVIDER` (default `local`)
 - `PUBLIC_MEDIA_BASE_URL` (default empty → falls back to `STATIC_BASE_URL`).
   **This must be set to a publicly reachable URL before Instagram/Facebook/
   WhatsApp posting can work live** — a Docker-internal address like

@@ -171,6 +171,9 @@ function LeadScoringSection() {
           </div>
         ) : (
           <div className="space-y-6">
+            <div className="text-xs uppercase tracking-wide text-amber-300">
+              {result.source_type || "UNKNOWN"}{result.is_fallback ? " · FALLBACK" : ""}
+            </div>
             <div className="flex items-center gap-6">
               <div className="text-center">
                 <div className={`text-4xl font-bold ${

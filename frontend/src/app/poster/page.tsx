@@ -143,6 +143,9 @@ export default function PosterGalleryPage() {
                           {ev.overall_score}/100
                         </span>
                       </div>
+                      <div className="text-[10px] uppercase tracking-wide text-amber-300 mb-2">
+                        {ev.source_type || "UNKNOWN"}{ev.is_fallback ? " · FALLBACK" : ""}
+                      </div>
                       <div className="h-1.5 bg-surface-muted rounded-full overflow-hidden">
                         <div 
                           className={`h-full rounded-full ${

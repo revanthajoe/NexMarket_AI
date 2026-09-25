@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.models.models import LeadScore
 from app.schemas.schemas import LeadScoreRead, LeadScoreRequest
 from app.services.ai.lead_prediction import lead_prediction_service
+from app.services.model_metadata import active_model_version_id
 
 router = APIRouter(prefix="/leads", tags=["Lead Scoring"])
 
@@ -18,6 +19,10 @@ async def predict_lead(
 ):
     result = await lead_prediction_service.predict(**payload.model_dump())
 
+    model_version_id = None
+    if result.get("source_type") == "PREDICTED":
+        model_version_id = await active_model_version_id(db, "xgboost")
+
     record = LeadScore(
         campaign_id=payload.campaign_id,
         lead_identifier=payload.lead_identifier,
@@ -26,6 +31,12 @@ async def predict_lead(
         category=result["category"],
         feature_importance=result["feature_importance"],
         input_features=payload.model_dump(),
+        source_type=result.get("source_type", "UNKNOWN"),
+        source_system=result.get("source_system"),
+        model_name=result.get("model_name"),
+        model_version=result.get("model_version"),
+        is_fallback=result.get("is_fallback"),
+        model_version_id=model_version_id,
     )
     db.add(record)
     await db.flush()

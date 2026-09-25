@@ -15,10 +15,14 @@ from app.db.session import get_db
 from app.models.models import AdCopy, Campaign, Poster, SocialPost
 from app.schemas.schemas import N8nTriggerCampaign, N8nWebhookResponse
 from app.services.ai.ad_generator import ad_copy_generator
+from app.services.ai.lead_prediction import lead_prediction_service
+from app.services.ai.lstm_forecast import lstm_forecast_service
 from app.services.ai.poster_evaluator import poster_evaluator
 from app.services.ai.poster_generator import poster_generator
+from app.services.ai.sentiment import sentiment_service
 from app.services.optimization.optimizer import campaign_optimizer
 from app.services.posting.posting_service import social_posting_service
+from app.services.model_metadata import active_model_version_id
 
 router = APIRouter(prefix="/n8n", tags=["n8n Webhooks"])
 
@@ -126,6 +130,8 @@ async def n8n_trigger_campaign(
                                     poster_id=poster_obj.id,
                                     **{k: v for k, v in norm.items() if k in columns},
                                 )
+                                if norm.get("source_type") == "PREDICTED":
+                                    ev.model_version_id = await active_model_version_id(bg_db, "qwen_vl")
                                 bg_db.add(ev)
                                 await bg_db.commit()
                                 log.info("pipeline_evaluate_done poster_id=%s", poster_obj.id)
@@ -156,6 +162,7 @@ async def n8n_trigger_campaign(
                                 language=get_brand_kit(c.id).language,
                             )
                             for platform, data in copies.items():
+                                is_fallback = data.get("fallback", False)
                                 ad = AdCopy(
                                     campaign_id=c.id,
                                     platform=platform,
@@ -163,6 +170,11 @@ async def n8n_trigger_campaign(
                                     body=data.get("body", ""),
                                     cta_variants=data.get("cta_variants"),
                                     hashtags=data.get("hashtags"),
+                                    fallback=is_fallback,
+                                    source_type="FALLBACK" if is_fallback else "PREDICTED",
+                                    source_system="template" if is_fallback else "local_qwen",
+                                    model_name=None if is_fallback else "Qwen/Qwen2.5-3B-Instruct",
+                                    model_version_id=None if is_fallback else await active_model_version_id(bg_db, "qwen_llm"),
                                 )
                                 bg_db.add(ad)
                             await bg_db.commit()
@@ -173,17 +185,53 @@ async def n8n_trigger_campaign(
 
                 # ── Optimize ──────────────────────────────────────────────
                 if "optimize" in steps:
-                    try:
-                        opt = await campaign_optimizer.optimize(
-                            campaign_goal=c.campaign_goal,
-                            target_audience=c.target_audience,
-                            budget=c.budget,
-                        )
-                        results["optimization"] = opt
-                        log.info("pipeline_optimize_done platform=%s", opt.get("recommended_platform"))
-                    except Exception as exc:
-                        log.error("pipeline_optimize_failed: %s", exc, exc_info=True)
-                        raise
+                    from app.models.models import OptimizationResult
+                    existing_opt = (await bg_db.execute(
+                        select(OptimizationResult)
+                        .where(OptimizationResult.campaign_id == campaign_id)
+                        .limit(1)
+                    )).scalars().all()
+
+                    if existing_opt:
+                        log.info("pipeline_skip_optimize campaign_id=%s already optimized", campaign_id)
+                        results["optimization"] = {
+                            "recommended_platform": existing_opt[0].recommended_platform,
+                            "recommended_time": existing_opt[0].recommended_time,
+                            "recommended_budget": existing_opt[0].recommended_budget,
+                            "confidence": existing_opt[0].confidence,
+                            "reasoning": existing_opt[0].reasoning,
+                            "platform_scores": existing_opt[0].platform_scores,
+                        }
+                    else:
+                        try:
+                            opt = await campaign_optimizer.optimize(
+                                campaign_goal=c.campaign_goal,
+                                target_audience=c.target_audience,
+                                budget=c.budget,
+                            )
+                            results["optimization"] = opt
+                            
+                            opt_record = OptimizationResult(
+                                campaign_id=campaign_id,
+                                recommended_platform=opt.get("recommended_platform", c.preferred_platform or "instagram"),
+                                recommended_time=opt.get("recommended_time"),
+                                recommended_budget=opt.get("recommended_budget"),
+                                confidence=opt.get("confidence", 0.0),
+                                reasoning=opt.get("reasoning"),
+                                platform_scores=opt.get("platform_scores"),
+                                source_type="RECOMMENDATION",
+                                algorithm="Thompson Sampling",
+                                policy_version=opt.get("policy_version"),
+                                reward_source=opt.get("reward_source", "UNKNOWN"),
+                                analytics_reference=f"campaign:{campaign_id}:events",
+                            )
+                            bg_db.add(opt_record)
+                            await bg_db.commit()
+
+                            log.info("pipeline_optimize_done platform=%s", opt.get("recommended_platform"))
+                        except Exception as exc:
+                            log.error("pipeline_optimize_failed: %s", exc, exc_info=True)
+                            raise
 
                 # ── Post ──────────────────────────────────────────────────
                 # Publishes to every platform in `platforms` independently —
@@ -215,6 +263,192 @@ async def n8n_trigger_campaign(
 
                     await social_posting_service.publish_platforms(bg_db, posts, text_content, image_url)
                     log.info("pipeline_post_done platforms=%s", target_platforms)
+
+                # ── Sentiment ─────────────────────────────────────────────
+                # Analyse a composite text assembled from the campaign's own
+                # copy so even a brand-new campaign (no user reviews yet) gets
+                # a meaningful sentiment record.  Idempotent: skipped when a
+                # record already exists for this campaign.
+                if "sentiment" in steps:
+                    from app.models.models import SentimentResult
+                    existing_sentiment = (await bg_db.execute(
+                        select(SentimentResult)
+                        .where(SentimentResult.campaign_id == campaign_id)
+                        .limit(1)
+                    )).scalars().all()
+
+                    if existing_sentiment:
+                        log.info("pipeline_skip_sentiment campaign_id=%s already analysed", campaign_id)
+                    else:
+                        try:
+                            # Build a representative corpus from the campaign fields
+                            # so the model has real signal even without user reviews.
+                            texts = [
+                                t for t in [
+                                    c.name,
+                                    c.description,
+                                    c.offer,
+                                    f"{c.product_name} for {c.target_audience}",
+                                ] if t
+                            ] or [c.name or "campaign"]
+
+                            analysis = await sentiment_service.analyze(texts, campaign_id)
+                            for r in analysis["results"]:
+                                record = SentimentResult(
+                                    campaign_id=campaign_id,
+                                    text=r["text"],
+                                    label=r["label"],
+                                    positive_score=r["positive_score"],
+                                    negative_score=r["negative_score"],
+                                    neutral_score=r.get("neutral_score", 0.0),
+                                    confidence=r["confidence"],
+                                    model_used=r["model_used"],
+                                )
+                                bg_db.add(record)
+                            await bg_db.commit()
+                            log.info(
+                                "pipeline_sentiment_done campaign_id=%s texts=%d summary=%s",
+                                campaign_id, len(texts), analysis["summary"],
+                            )
+                        except Exception as exc:
+                            log.error("pipeline_sentiment_failed: %s", exc, exc_info=True)
+
+                # ── Lead Prediction ────────────────────────────────────────
+                # Generates a representative lead score derived from the
+                # campaign's targeting settings.  Idempotent: skipped when a
+                # LeadScore row already exists for this campaign.
+                if "lead_prediction" in steps:
+                    from app.models.models import LeadScore
+                    existing_leads = (await bg_db.execute(
+                        select(LeadScore)
+                        .where(LeadScore.campaign_id == campaign_id)
+                        .limit(1)
+                    )).scalars().all()
+
+                    if existing_leads:
+                        log.info("pipeline_skip_lead_prediction campaign_id=%s already scored", campaign_id)
+                    else:
+                        try:
+                            # Map campaign fields to lead-predictor feature space.
+                            # These are illustrative baseline values; real leads
+                            # come from analytics events via the /leads/predict
+                            # endpoint once the campaign is live.
+                            platform = c.preferred_platform or "instagram"
+                            result = await lead_prediction_service.predict(
+                                clicks=10,
+                                views=200,
+                                time_spent_seconds=90,
+                                prior_purchases=1,
+                                source_platform=platform,
+                                device="mobile",
+                                age_group="25-34",
+                                location_tier=1,
+                                campaign_id=campaign_id,
+                                lead_identifier="pipeline_baseline",
+                            )
+                            lead_record = LeadScore(
+                                campaign_id=campaign_id,
+                                lead_identifier="pipeline_baseline",
+                                score=result["score"],
+                                purchase_probability=result["purchase_probability"],
+                                category=result["category"],
+                                feature_importance=result.get("feature_importance", {}),
+                                input_features={
+                                    "clicks": 10, "views": 200,
+                                    "time_spent_seconds": 90,
+                                    "prior_purchases": 1,
+                                    "source_platform": platform,
+                                    "device": "mobile",
+                                    "age_group": "25-34",
+                                    "location_tier": 1,
+                                },
+                                source_type=result.get("source_type", "UNKNOWN"),
+                                source_system=result.get("source_system"),
+                                model_name=result.get("model_name"),
+                                model_version=result.get("model_version"),
+                                is_fallback=result.get("is_fallback"),
+                                model_version_id=(
+                                    await active_model_version_id(bg_db, "xgboost")
+                                    if result.get("source_type") == "PREDICTED" else None
+                                ),
+                            )
+                            bg_db.add(lead_record)
+                            await bg_db.commit()
+                            log.info(
+                                "pipeline_lead_prediction_done campaign_id=%s score=%.1f category=%s",
+                                campaign_id, result["score"], result["category"],
+                            )
+                        except Exception as exc:
+                            log.error("pipeline_lead_prediction_failed: %s", exc, exc_info=True)
+
+                # ── Forecast ───────────────────────────────────────────────
+                # Runs the LSTM engagement forecast.  Uses any AnalyticsEvent
+                # rows already present (may be empty for a brand-new campaign;
+                # the LSTM service handles that gracefully with synthetic
+                # baselines).  Idempotent: skipped when a forecast already
+                # exists for this campaign.
+                if "forecast" in steps:
+                    from app.models.models import AnalyticsEvent, EngagementForecast
+                    existing_forecast = (await bg_db.execute(
+                        select(EngagementForecast)
+                        .where(EngagementForecast.campaign_id == campaign_id)
+                        .limit(1)
+                    )).scalars().all()
+
+                    if existing_forecast:
+                        log.info("pipeline_skip_forecast campaign_id=%s already forecasted", campaign_id)
+                    else:
+                        try:
+                            events_r = await bg_db.execute(
+                                select(AnalyticsEvent)
+                                .where(AnalyticsEvent.campaign_id == campaign_id)
+                                .where(AnalyticsEvent.source_type == "ACTUAL")
+                                .order_by(AnalyticsEvent.event_date.asc())
+                            )
+                            history = [
+                                {
+                                    "likes": e.likes,
+                                    "shares": e.shares,
+                                    "comments": e.comments,
+                                    "ctr": e.ctr,
+                                    "reach": e.reach,
+                                    "source_type": e.source_type,
+                                    "event_date": e.event_date,
+                                }
+                                for e in events_r.scalars().all()
+                            ]
+                            forecast_data = await lstm_forecast_service.forecast(
+                                campaign_id=campaign_id,
+                                analytics_rows=history,
+                                horizon_days=7,
+                            )
+                            forecast_record = EngagementForecast(
+                                campaign_id=campaign_id,
+                                forecast_horizon_days=7,
+                                predicted_likes=forecast_data.get("predicted_likes"),
+                                predicted_shares=forecast_data.get("predicted_shares"),
+                                predicted_comments=forecast_data.get("predicted_comments"),
+                                predicted_ctr=forecast_data.get("predicted_ctr"),
+                                predicted_reach=forecast_data.get("predicted_reach"),
+                                confidence_intervals=forecast_data.get("confidence_intervals"),
+                                model_version=forecast_data.get("model_version", "UNKNOWN"),
+                                source_type=forecast_data.get("source_type", "UNKNOWN"),
+                                history_source=forecast_data.get("history_source", "UNKNOWN"),
+                                source_reference=f"analytics_events:{len(history)}",
+                                is_fallback=forecast_data.get("is_fallback"),
+                                model_version_id=(
+                                    await active_model_version_id(bg_db, "lstm")
+                                    if forecast_data.get("source_type") == "FORECAST" else None
+                                ),
+                            )
+                            bg_db.add(forecast_record)
+                            await bg_db.commit()
+                            log.info(
+                                "pipeline_forecast_done campaign_id=%s horizon=7",
+                                campaign_id,
+                            )
+                        except Exception as exc:
+                            log.error("pipeline_forecast_failed: %s", exc, exc_info=True)
 
                 # ── Finalise ──────────────────────────────────────────────
                 c.status = "posted" if "post" in steps else "ready"
@@ -288,8 +522,17 @@ async def n8n_ingest_analytics(
     from app.models.models import AnalyticsEvent
     from datetime import datetime
 
+    campaign_id = data.get("campaign_id")
+    campaign = await db.get(Campaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    source_type = data.get("source_type", "UNKNOWN")
+    if source_type not in {"ACTUAL", "SIMULATED", "UNKNOWN"}:
+        raise HTTPException(status_code=422, detail="source_type must be ACTUAL, SIMULATED, or UNKNOWN")
+
     event = AnalyticsEvent(
-        campaign_id=data["campaign_id"],
+        campaign_id=campaign_id,
         platform=data.get("platform", "unknown"),
         event_date=datetime.fromisoformat(data.get("event_date", datetime.utcnow().isoformat())),
         impressions=data.get("impressions", 0),
@@ -300,6 +543,11 @@ async def n8n_ingest_analytics(
         reach=data.get("reach", 0),
         ctr=data.get("ctr", 0.0),
         spend=data.get("spend", 0.0),
+        is_mock=source_type == "SIMULATED",
+        source_type=source_type,
+        source_system=data.get("source_system", "n8n"),
+        source_reference=data.get("source_reference"),
+        synced_at=datetime.utcnow(),
     )
     db.add(event)
     return {"status": "ok"}

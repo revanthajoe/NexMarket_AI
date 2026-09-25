@@ -47,6 +47,11 @@ async def lifespan(app: FastAPI):
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 
+    from app.db.session import AsyncSessionLocal
+    from app.services.model_metadata import register_runtime_models
+    async with AsyncSessionLocal() as metadata_db:
+        await register_runtime_models(metadata_db)
+
     # Pre-warm ML models in background (non-blocking)
     import asyncio
 

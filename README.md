@@ -266,8 +266,7 @@ With these settings:
 | Variable              | Default    | Description                            |
 |-----------------------|------------|----------------------------------------|
 | OPENAI_API_KEY        | (empty)    | OpenAI key for GPT-4o + DALL·E         |
-| GEMINI_API_KEY        | (empty)    | Google Gemini key                      |
-| LLM_PROVIDER          | local      | openai, gemini, or local               |
+| LLM_PROVIDER          | local      | openai or local                        |
 | IMAGE_PROVIDER        | local      | openai, stability, mock, or local      |
 | SOCIAL_MODE           | mock       | live or mock                           |
 | META_ACCESS_TOKEN     | (empty)    | Meta Graph API token (Instagram/Facebook) |

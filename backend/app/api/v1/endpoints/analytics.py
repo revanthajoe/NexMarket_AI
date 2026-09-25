@@ -26,6 +26,14 @@ from app.schemas.schemas import DashboardSummary
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
 
+def _aggregate_source_type(is_mock: bool, has_simulated: bool, has_unknown: bool) -> str:
+    if is_mock or has_simulated:
+        return "SIMULATED"
+    if has_unknown:
+        return "UNKNOWN"
+    return "ACTUAL"
+
+
 @router.get("/dashboard", response_model=DashboardSummary)
 async def get_dashboard(db: AsyncSession = Depends(get_db)):
     total_campaigns = (await db.execute(select(func.count(Campaign.id)))).scalar() or 0
@@ -94,6 +102,8 @@ async def get_engagement_timeseries(
             func.coalesce(func.sum(AnalyticsEvent.likes), 0),
             func.coalesce(func.sum(AnalyticsEvent.reach), 0),
             func.max(AnalyticsEvent.is_mock),
+            func.max(func.cast(AnalyticsEvent.source_type == "SIMULATED", Integer)),
+            func.max(func.cast(AnalyticsEvent.source_type == "UNKNOWN", Integer)),
         )
         .where(AnalyticsEvent.event_date >= cutoff)
         .group_by(day)
@@ -112,8 +122,9 @@ async def get_engagement_timeseries(
             "likes": int(likes),
             "reach": int(reach),
             "is_mock": bool(is_mock),
+            "source_type": _aggregate_source_type(bool(is_mock), bool(has_simulated), bool(has_unknown)),
         }
-        for event_date, impressions, clicks, likes, reach, is_mock in result.all()
+        for event_date, impressions, clicks, likes, reach, is_mock, has_simulated, has_unknown in result.all()
     ]
 
 
@@ -143,6 +154,8 @@ async def get_platform_breakdown(
             func.coalesce(func.sum(AnalyticsEvent.spend), 0.0),
             func.max(AnalyticsEvent.is_mock),
             func.max(AnalyticsEvent.synced_at),
+            func.max(func.cast(AnalyticsEvent.source_type == "SIMULATED", Integer)),
+            func.max(func.cast(AnalyticsEvent.source_type == "UNKNOWN", Integer)),
         )
         .where(AnalyticsEvent.event_date >= cutoff)
         .group_by(AnalyticsEvent.platform)
@@ -155,7 +168,7 @@ async def get_platform_breakdown(
     breakdown = []
     for (
         platform, impressions, clicks, likes, shares,
-        comments, reach, spend, is_mock, synced_at,
+        comments, reach, spend, is_mock, synced_at, has_simulated, has_unknown,
     ) in rows:
         impressions = int(impressions)
         clicks = int(clicks)
@@ -174,6 +187,7 @@ async def get_platform_breakdown(
                 if impressions else 0.0
             ),
             "is_mock": bool(is_mock),
+            "source_type": _aggregate_source_type(bool(is_mock), bool(has_simulated), bool(has_unknown)),
             "last_synced_at": synced_at.isoformat() if hasattr(synced_at, "isoformat") else synced_at,
         })
 
@@ -239,6 +253,7 @@ async def get_campaign_analytics(campaign_id: str, db: AsyncSession = Depends(ge
             "ctr": e.ctr,
             "spend": e.spend,
             "is_mock": e.is_mock,
+            "source_type": e.source_type,
             "last_synced_at": e.synced_at.isoformat() if e.synced_at else None,
         }
         for e in events

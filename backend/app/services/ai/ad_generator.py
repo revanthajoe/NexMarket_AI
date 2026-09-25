@@ -80,13 +80,9 @@ class AdCopyGeneratorService:
                 product_name, description, offer, target_audience,
                 campaign_goal, platforms, tone, language,
             )
-            # Routed through AI_TEXT_PROVIDER (Gemini by default), the same
-            # switch poster copy uses. This is what actually fixes non-English
-            # ad copy: Qwen2.5-3B could not emit parseable JSON for Tamil at
-            # all — it failed both attempts below and fell through to the
-            # hardcoded English template, so a Tamil request came back looking
-            # like a successful English generation. Gemini's
-            # response_mime_type="application/json" removes that failure mode.
+            # Routed through the local Qwen provider, the same path poster copy
+            # uses. This keeps ad copy and poster copy on one deterministic
+            # provider boundary with the existing template fallback.
             #
             # The retry stays for the local branch, where failure is a
             # stochastic sampling outcome (temperature=0.7, do_sample=True)

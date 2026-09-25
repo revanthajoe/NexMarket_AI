@@ -89,11 +89,6 @@ tweepy>=4.14.0
 # ── Optional cloud fallback (only required if IMAGE_PROVIDER=openai) ──────────
 openai>=1.30.0
 
-# ── Gemini (required if IMAGE_PROVIDER=gemini) ────────────────────────────────
-# Pure-python HTTP client: pulls no torch/numpy pins, so it is safe alongside
-# the deliberately frozen HF stack above.
-google-genai>=1.60.0
-
 # ── Dev / Test ────────────────────────────────────────────────────────────────
 pytest>=8.2.0
 pytest-asyncio>=0.23.0
