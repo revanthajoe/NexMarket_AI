@@ -23,6 +23,7 @@ Improvements vs previous version:
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -40,6 +41,10 @@ logger = get_logger(__name__)
 
 _UPLOAD = Path(settings.POSTER_UPLOAD_DIR)
 _UPLOAD.mkdir(parents=True, exist_ok=True)
+
+_MOCK_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAFc1mYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJ0UkGAAAAAAgI0wAAAAAASUVORK5CYII="
+)
 
 
 # ── Language-aware CTA strings ──────────────────────────────────────────────
@@ -278,6 +283,8 @@ class PosterGeneratorService:
         campaign_id:     Optional[str] = None,
         seed:            Optional[int] = None,
         language:        Optional[str] = None,
+        sdxl_model_version_id: Optional[str] = None,
+        sdxl_lora_path: Optional[str] = None,
     ) -> dict:
         logger.info("poster_generate variation=%d provider=%s platform=%s", variation, settings.IMAGE_PROVIDER, platform)
 
@@ -286,11 +293,27 @@ class PosterGeneratorService:
                 campaign_name, product_name, description, offer,
                 target_audience, campaign_goal, brand_style or "",
                 variation, platform, campaign_id, seed, language,
+                sdxl_model_version_id, sdxl_lora_path,
             )
         elif settings.IMAGE_PROVIDER == "openai":
             return await self._generate_openai("A placeholder prompt", product_name, variation)
+        elif settings.IMAGE_PROVIDER == "mock":
+            return await self._generate_mock(product_name, variation)
         else:
             raise ValueError(f"Unsupported IMAGE_PROVIDER={settings.IMAGE_PROVIDER!r}")
+
+    async def _generate_mock(self, product_name: str, variation: int) -> dict:
+        """Return a deterministic mock poster payload without heavy model providers."""
+        slug = product_name.replace(" ", "_")[:20] or "campaign"
+        fname = f"{slug}_mock_v{variation}_{uuid.uuid4().hex[:8]}.png"
+        fpath = _UPLOAD / fname
+        fpath.write_bytes(_MOCK_PNG_BYTES)
+        return {
+            "image_url": f"{settings.STATIC_BASE_URL}/posters/{fname}",
+            "prompt_used": "mock image generation",
+            "provider": "mock",
+            "variation_index": variation,
+        }
 
     # ── Local multi-stage pipeline ────────────────────────────────────────────
 
@@ -308,6 +331,8 @@ class PosterGeneratorService:
         campaign_id:     Optional[str],
         seed:            Optional[int] = None,
         language:        Optional[str] = None,
+        sdxl_model_version_id: Optional[str] = None,
+        sdxl_lora_path: Optional[str] = None,
     ) -> dict:
         # Declared outside the try: a retry attempt exists only to *improve* on
         # an earlier one, so if a later attempt crashes we must still be able to
@@ -498,6 +523,8 @@ class PosterGeneratorService:
                     width=fmt.sdxl_width,
                     height=fmt.sdxl_height,
                     seed=attempt_seed,
+                    lora_path=sdxl_lora_path,
+                    model_version_id=sdxl_model_version_id,
                 )
                 visual_url  = result.get("image_url", "")
                 resolved_seed = result.get("seed", attempt_seed)
@@ -577,6 +604,8 @@ class PosterGeneratorService:
                         # record instead of letting it masquerade as real copy —
                         # same convention as poster_evaluator's fallback flag.
                         "brochure_spec": brochure_spec,
+                        "sdxl_model_version_id": sdxl_model_version_id,
+                        "sdxl_lora_loaded": result.get("lora_loaded", False),
                     },
                 }
 

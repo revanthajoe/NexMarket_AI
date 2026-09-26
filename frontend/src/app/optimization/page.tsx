@@ -36,7 +36,7 @@ export default function OptimizationPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+        <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
             <Target size={20} className="text-brand-400" />
           </div>
@@ -49,7 +49,7 @@ export default function OptimizationPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="glass-dynamic rounded-2xl p-6 animate-fade-in-up">
-          <h2 className="text-lg font-semibold text-white mb-4">Run Optimization</h2>
+          <h2 className="text-lg font-semibold text-slate-800 mb-4">Run Optimization</h2>
           <div className="space-y-4">
             <div className="space-y-1.5">
               <label htmlFor="opt-campaign" className="text-xs font-medium text-slate-400 uppercase tracking-wide">Select Campaign</label>
@@ -88,7 +88,7 @@ export default function OptimizationPage() {
         </div>
 
         <div className="glass-dynamic rounded-2xl p-6 animate-fade-in-up delay-100">
-          <h2 className="text-lg font-semibold text-white mb-4">Optimization Results</h2>
+          <h2 className="text-lg font-semibold text-slate-800 mb-4">Optimization Results</h2>
           {!result ? (
             <div className="h-48 flex items-center justify-center text-slate-500 text-sm border border-dashed border-surface-border rounded-xl">
               Run optimizer to view AI recommendations
@@ -101,11 +101,11 @@ export default function OptimizationPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-brand-500/10 border border-brand-500/20 rounded-xl p-4">
                   <div className="text-xs text-brand-400 uppercase tracking-wide mb-1">Recommended Platform</div>
-                  <div className="text-xl font-bold text-white capitalize">{result.recommended_platform}</div>
+                  <div className="text-xl font-bold text-slate-900 capitalize">{result.recommended_platform}</div>
                 </div>
                 <div className="bg-surface-muted/30 border border-surface-border rounded-xl p-4">
                   <div className="text-xs text-slate-400 uppercase tracking-wide mb-1">AI Confidence</div>
-                  <div className="text-xl font-bold text-white">{(result.confidence * 100).toFixed(1)}%</div>
+                  <div className="text-xl font-bold text-slate-900">{(result.confidence * 100).toFixed(1)}%</div>
                 </div>
               </div>
 

@@ -39,14 +39,31 @@ def _version_for(spec: ModelSpec) -> str:
     return "artifact" if spec.model_id.startswith("local://") else "configured"
 
 
+async def _canonical_model_metadata(db: AsyncSession, name: str) -> ModelMetadata | None:
+    """Collapse duplicate registry rows into a single canonical record."""
+    rows = (await db.execute(
+        select(ModelMetadata)
+        .where(ModelMetadata.name == name)
+        .order_by(ModelMetadata.created_at.asc())
+    )).scalars().all()
+    if not rows:
+        return None
+    canonical = rows[0]
+    if len(rows) > 1:
+        for duplicate in rows[1:]:
+            for version in duplicate.versions:
+                version.model_id = canonical.id
+            await db.delete(duplicate)
+        await db.flush()
+    return canonical
+
+
 async def register_runtime_models(db: AsyncSession) -> dict[str, str]:
     """Register the current runtime registry without creating duplicates."""
     version_ids: dict[str, str] = {}
     for registry_key, spec in REGISTRY.items():
         name = _MODEL_NAMES.get(registry_key, registry_key)
-        model = (await db.execute(
-            select(ModelMetadata).where(ModelMetadata.name == name)
-        )).scalar_one_or_none()
+        model = await _canonical_model_metadata(db, name)
         if model is None:
             model = ModelMetadata(
                 name=name,
@@ -91,11 +108,23 @@ async def register_runtime_models(db: AsyncSession) -> dict[str, str]:
 
 async def active_model_version_id(db: AsyncSession, registry_key: str) -> str | None:
     name = _MODEL_NAMES.get(registry_key, registry_key)
-    result = await db.execute(
+    statement = (
         select(ModelVersion.id)
         .join(ModelMetadata, ModelMetadata.id == ModelVersion.model_id)
         .where(ModelMetadata.name == name, ModelVersion.status == "ACTIVE")
         .order_by(ModelVersion.created_at.desc())
         .limit(1)
     )
-    return result.scalar_one_or_none()
+    result = await db.execute(statement)
+    version_id = result.scalar_one_or_none()
+    if version_id is not None:
+        return version_id
+
+    # ASGI lifespan hooks are not guaranteed to run in lightweight workers or
+    # tests using a direct transport, so keep provenance registration lazy too.
+    if registry_key not in REGISTRY:
+        return None
+    await register_runtime_models(db)
+    result = await db.execute(statement)
+    version_id = result.scalar_one_or_none()
+    return version_id

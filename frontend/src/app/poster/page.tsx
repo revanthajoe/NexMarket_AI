@@ -57,7 +57,7 @@ export default function PosterGalleryPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+        <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
             <ImageIcon size={20} className="text-brand-400" />
           </div>

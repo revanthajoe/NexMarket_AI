@@ -158,7 +158,8 @@ async function rawReq<T>(
 /** The one definition of "run the full pipeline" — shared by the new-campaign
  *  auto-run and the campaign detail page's Run Pipeline button. */
 export const PIPELINE_STEPS = [
-  "poster", "adcopy", "evaluate", "forecast", "optimize", "post",
+  "poster", "evaluate", "adcopy", "optimize", "post", "analytics",
+  "sentiment", "lead_prediction", "forecast", "reward_sync",
 ];
 
 /** Campaign statuses that mean the pipeline is still working. */

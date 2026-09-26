@@ -100,7 +100,7 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+        <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
             <BarChart3 size={20} className="text-brand-400" />
           </div>
@@ -179,7 +179,7 @@ export default function AnalyticsPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         <div className="glass rounded-2xl p-6 border border-surface-border flex flex-col h-full">
           <div className="mb-4">
-            <h2 className="text-lg font-semibold text-white">Engagement Over Time</h2>
+            <h2 className="text-lg font-semibold text-slate-800">Engagement Over Time</h2>
             <p className="text-xs text-slate-500 mt-1">Daily likes and reach · last {days} days · {scopeName}</p>
           </div>
           <div className="flex-1 mt-auto">
@@ -190,7 +190,7 @@ export default function AnalyticsPage() {
         <div className="glass rounded-2xl p-6 border border-surface-border">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-lg font-semibold text-white">LSTM Campaign Forecast</h2>
+              <h2 className="text-lg font-semibold text-slate-800">LSTM Campaign Forecast</h2>
               <p className="text-xs text-slate-500 mt-1">Predictive engagement modelling</p>
             </div>
             <Activity size={24} className="text-brand-400 opacity-50" />
@@ -235,7 +235,7 @@ export default function AnalyticsPage() {
 
       {/* ── Platform breakdown ────────────────────────────────────────── */}
       <div className="glass rounded-2xl p-6 border border-surface-border">
-        <h2 className="text-lg font-semibold text-white mb-1">Performance by Platform</h2>
+        <h2 className="text-lg font-semibold text-slate-800 mb-1">Performance by Platform</h2>
         <p className="text-xs text-slate-500 mb-5">
           Totals over the last {days} days · CTR computed from summed clicks and impressions
         </p>

@@ -28,10 +28,10 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white">
+            <h1 className="text-3xl font-bold text-slate-900">
             <span className="gradient-text">NexMarket AI</span>
           </h1>
-          <p className="text-slate-400 mt-1 text-sm">
+          <p className="text-slate-600 mt-1 text-sm">
             AI-powered marketing automation — all pipelines in one place
           </p>
         </div>
@@ -50,7 +50,7 @@ export default function DashboardPage() {
       <div className="glass rounded-2xl p-6 border border-surface-border">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-lg font-semibold text-white">Engagement Overview</h2>
+            <h2 className="text-lg font-semibold text-slate-800">Engagement Overview</h2>
             <p className="text-xs text-slate-500 mt-0.5">
               14-day campaign performance, aggregated across all campaigns
             </p>
@@ -72,7 +72,7 @@ export default function DashboardPage() {
                             group-hover:bg-brand-500/20 transition-colors">
               <Icon size={18} className="text-brand-400" />
             </div>
-            <p className="text-sm font-semibold text-white">{label}</p>
+            <p className="text-sm font-semibold text-slate-800">{label}</p>
             <p className="text-xs text-slate-500 mt-1">{desc}</p>
           </Link>
         ))}

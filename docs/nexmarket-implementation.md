@@ -483,3 +483,197 @@ Created and applied `7a1b2c3d4e5f_phase_8_optimization_rewards.py` from Phase 6 
 No model was retrained.
 No model was fine-tuned.
 No Phase 9 work was started.
+
+## Phase 10 - SDXL Long-Term LoRA Adaptation
+Status: Implemented with documented limitations
+
+### Eligible creative data
+
+The manual `app.services.sdxl_lora` lifecycle selects immutable creative examples from existing `posters`, `poster_evaluations`, and `poster_feedback` rows. A production example must have a non-mock poster, a prompt, and legitimate quality evidence: a non-fallback `ACTUAL` or `PREDICTED` evaluation scoring at least the existing 70-point approval threshold, or equivalent non-fallback `ACTUAL`/`PREDICTED` feedback. AI evaluation remains `PREDICTED`; it is not treated as human ground truth.
+
+`SIMULATED`, `FALLBACK`, and `UNKNOWN` examples are excluded from the production dataset. Poor examples are not positive training targets. Their existing evaluation and feedback records remain available for future analysis rather than being silently imitated.
+
+Dataset creation uses a timestamp cutoff, so posters created after the dataset snapshot cannot leak into an earlier dataset. The manifest records the cutoff, eligibility-policy version, source poster IDs, evaluation IDs, feedback IDs, and excluded provenance classes.
+
+### Dataset versioning and insufficient data
+
+Every dataset receives a new immutable version such as `sdxl_marketing_v1`; previous datasets are not overwritten. The configurable `SDXL_LORA_MIN_EXAMPLES` default is 8. Below that threshold the dataset is persisted as `INSUFFICIENT_DATA`, no training candidate is created, and no synthetic examples are added.
+
+### Training lifecycle
+
+The existing Phase 3 `TrainingDataset`, `TrainingRun`, `ModelMetadata`, `ModelVersion`, and `ModelValidation` tables are reused. A manual caller may inject a training adapter at the training boundary. Runs move through `PENDING`, `RUNNING`, and `COMPLETED`/`FAILED`, with `INSUFFICIENT_DATA` and `TRAINING_UNAVAILABLE` outcomes when appropriate.
+
+`COMPLETED` requires a real adapter file. The service rejects missing artifacts and calculates a real SHA-256 hash; it never creates an empty safetensors file, fake path, fake hash, or invented metric. LoRA configuration is stored only in the training-run metadata supplied by the caller.
+
+### Model versioning, validation, and promotion
+
+The existing Stable Diffusion XL model family remains the baseline. A successful run creates a LoRA `ModelVersion` with the dataset version, base model reference, adapter path, real artifact hash, and `status=VALIDATING`. Completion alone cannot activate it.
+
+Validation is persisted through `ModelValidation` with metrics and a baseline comparison. Promotion requires a `PASSED` validation with `approval_status=APPROVED`. A failed or unvalidated candidate remains non-active. The previous active version is retired only after the candidate becomes active.
+
+### Rollback and generation provenance
+
+The previous active model-version ID is retained in the promoted candidate configuration. Rollback restores that version and retires the candidate without deleting its artifact.
+
+Existing SDXL loading and `ModelManager` lifecycle behavior remain intact. A validated active LoRA path is passed into the existing SDXL service and loaded before CPU-offload hooks. If no validated LoRA is active, generation uses the existing baseline SDXL path. Newly generated and feedback-regenerated posters persist `model_version_id`; runtime metadata records whether LoRA was actually loaded, so generation cannot claim adapter usage when none was loaded.
+
+### Migration
+
+Created and applied `8b2c3d4e5f6a_phase_10_sdxl_lora.py` from Alembic head `7a1b2c3d4e5f`. It adds the immutable `training_datasets.manifest` field and nullable `posters.model_version_id` with a foreign key to `model_versions`. No duplicate registry or training tables were introduced.
+
+### Tests and validation
+
+- Deterministic Phase 10 lifecycle tests: 2 passed.
+- Migration upgrade/current: passed; current head is `8b2c3d4e5f6a`.
+- Existing runtime model metadata and poster feedback/regeneration regressions: passed.
+- Existing focused Phase 9 learning-loop subset remains previously validated at 17 passed.
+- Compilation of the modified backend and AI modules: passed.
+
+### Limitations
+
+- This phase provides the controlled manual training boundary and metadata lifecycle; it does not launch a GPU training job or add a production training scheduler.
+- No new model-admin frontend surface was added because the repository has no existing model administration page.
+- Live PostgreSQL validation was not available in this environment.
+- The existing non-heavy poster-generation regression currently expects `IMAGE_PROVIDER=mock`, while the current poster generator accepts only `local` and `openai`; that unrelated pre-existing mismatch remains untouched. Heavy SDXL generation was not run.
+
+No model was retrained in this validation run.
+No model was fine-tuned in this validation run.
+No Phase 11 work was started.
+
+## Phase 9 - Trustworthy Post-Publishing Learning Loop
+Status: Completed with documented limitations
+
+### Objective
+
+Connect the existing campaign pipeline into one trustworthy post-publishing learning loop without redesigning the architecture or duplicating the already-working model services. The loop now follows the real campaign lifecycle: publish -> actual analytics -> sentiment/lead prediction/forecast gating -> optimization reward sync.
+
+### Workflow and provenance rules
+
+The orchestrator in `backend/app/api/v1/endpoints/n8n_webhooks.py` remains the integration boundary for the campaign lifecycle. It now preserves the intended provenance semantics:
+
+- `post` is the real publish step and is the only step that creates actual outbound content.
+- `analytics` syncs platform metrics into `analytics_events` only from real platform data and records those rows as `ACTUAL`.
+- `sentiment` only runs when actual comment text exists and persists `PREDICTED` sentiment results with `input_source_type=ACTUAL`; synthetic campaign copy is not treated as real user feedback.
+- `lead_prediction` only runs when eligible actual analytics features are available and persists `PREDICTED` lead scores from the actual signal, not synthetic defaults.
+- `forecast` uses actual analytics history only and persists `FORECAST` rows with `history_source=ACTUAL` and `source_type=FORECAST`.
+- `reward_sync` reuses the canonical optimization reward path and updates rewards only when an ACTUAL platform event exists, with `reward_source=ACTUAL` and `bandit_updated` as the idempotency gate.
+
+Recommendation records remain separate from the observed business result. The system never upgrades a recommendation into a real reward without an actual event behind it.
+
+### Pipeline integration
+
+The default `N8nTriggerCampaign.steps` order was extended to include `analytics` and `reward_sync`, so the existing pipeline now follows a real data flow rather than an ad-hoc sequence of model calls.
+
+### Actuation boundary and idempotency
+
+- Sentiment is skipped when no actual text is present.
+- Lead prediction is skipped when no actual analytics signal exists.
+- Forecast generation is skipped when a forecast already exists for the campaign.
+- Reward synchronization is idempotent through persisted `OptimizationResult.bandit_updated` state.
+- The background pipeline continues to commit per-step results and preserves campaign status updates rather than silently failing.
+
+### Migration
+
+No migration was required for Phase 9. The schema already contained the provenance and reward fields needed for the trustworthy learning loop.
+
+### Tests and validation
+
+Focused regression validation was executed with:
+
+- `PYTHONPATH=. pytest tests/test_main.py -k "sentiment or forecast or optimization or pipeline" -q`
+
+Result: `17 passed, 80 deselected`.
+
+### Limitations
+
+- This phase intentionally does not introduce a new reward model or a new optimization abstraction; it reuses the existing Thompson Sampling and reward logic.
+- Forecast evaluation against later actual outcomes is still outside the current scope because no forecast-evaluation workflow exists in the repository.
+- PostgreSQL live validation was not available in this environment.
+
+No model was retrained.
+No model was fine-tuned.
+No Phase 10 work was started.
+
+## Phase 11 - Production n8n Orchestration
+Status: Completed
+
+### Production n8n Orchestration
+The existing n8n workflow orchestrates the backend through distinct REST calls rather than duplicating model logic in n8n. The pipeline is structured into three stages:
+1. **Creation**: Orchestrates poster generation, evaluation, ad copy generation, and optimization.
+2. **Publishing**: Executes the social publishing logic.
+3. **Async Analytics & Learning**: bounded wait/retry, analytics synchronization, ACTUAL analytics readiness check, sentiment analysis, lead prediction, engagement forecasting, optimization, and reward synchronization.
+
+### Retry & Idempotency Behavior
+- **Publishing Idempotency**: `create_posts_for_platforms` reuses existing campaign/platform rows. Posted rows are never published again; ambiguous in-flight rows are not blindly retried. New rows use bounded adapter retries.
+- **Reward Sync Idempotency**: The optimization reward loop relies on the `bandit_updated` flag to prevent duplicate Thompson Sampling updates for the same outcome.
+
+### Provenance & ACTUAL-Data Gating
+- Direct n8n analytics payloads cannot promote themselves to `ACTUAL`; requested ACTUAL input is classified as `SIMULATED` in mock mode and `UNKNOWN` otherwise. Real ACTUAL provenance is assigned by configured platform-adapter metric synchronization.
+- Analytics readiness counts `source_type=ACTUAL` specifically; UNKNOWN and simulated events do not unlock learning.
+- Existing Phase 9 gates remain authoritative: lead prediction and forecasting consume only eligible ACTUAL analytics, and reward synchronization consumes only matching ACTUAL outcomes.
+- The lead prediction logic no longer fabricates synthetic demographic defaults (	ime_spent_seconds, prior_purchases, device, etc.) when these are unavailable, ensuring only real signals enter the machine learning path.
+
+### Failure Isolation
+Downstream failures such as analytics syncing or forecasting do not overwrite successful upstream state. A campaign that has reached `posted` retains that status during downstream-only retries, while successful analytics and other persisted outputs remain available independently.
+
+### Credential Handling & Safety
+- No random or fabricated analytics logic is present in the production workflow JSON.
+- No committed n8n credential files or hard-coded social secrets were found.
+- The backend URL is resolved from `NEXMARKET_BACKEND_URL`, with the localhost fallback retained for development only.
+- An optional n8n `$execution.id` is propagated to backend pipeline logs alongside `campaign_id`.
+
+### Tests and Validation
+- Focused Phase 11 tests: `6 passed`.
+- Relevant Phase 8/9 learning regressions: `17 passed, 80 deselected`.
+- Workflow JSON parsing and connection-reference validation passed.
+- Backend compilation passed.
+- Alembic head remains `8b2c3d4e5f6a`; no migration was required.
+
+### Limitations
+- Live external-platform publishing and analytics were not executed in this environment.
+- Polling intervals are bounded development defaults and require platform-specific tuning in deployment.
+- No large execution-history subsystem was introduced; `campaign_id` and optional n8n execution ID provide lightweight traceability.
+
+No Phase 12 work was started.
+
+## Phase 12 - Frontend / Dashboard
+Status: Completed
+
+### Dashboard architecture
+
+The existing Next.js application remains the frontend control center. Existing campaign, poster, analytics, posting, leads, optimization, and campaign-detail routes were preserved and upgraded rather than replaced. The centralized `frontend/src/lib/api.ts` client remains the only backend request layer.
+
+The campaign detail view now includes a reusable `CampaignPipelineStatus` component. It derives visible stage states from loaded campaign, poster, evaluation, ad-copy, and publishing data and does not claim that learning is complete while analytics or rewards remain pending.
+
+### Provenance display
+
+The reusable `ProvenanceBadge` component displays `ACTUAL`, `SIMULATED`, `PREDICTED`, `FORECAST`, `RECOMMENDATION`, `FALLBACK`, `UNKNOWN`, and `PENDING`. Analytics empty states explicitly refer to ACTUAL data. The frontend pipeline trigger now includes the existing analytics, sentiment, lead prediction, forecast, and reward synchronization stages.
+
+Lead identifiers no longer use `Math.random()`. No fabricated frontend analytics or production metrics were added.
+
+### Visual system and motion
+
+The dashboard visual system was changed from dark indigo to light blue operational surfaces with pale yellow attention states and soft pink failure states. Existing Tailwind, Lucide, Recharts, and Framer Motion/CSS capabilities remain in use. A restrained ambient background animation and existing staggered reveal animations provide motion without obscuring data. `prefers-reduced-motion` disables animation and transition effects.
+
+### Campaign and intelligence surfaces
+
+Campaign list rows now show status and provenance context. Campaign detail exposes pipeline progression, poster/evaluation state, versions and regeneration controls, ad-copy and publishing tabs, forecasting, and optimization views using existing backend contracts. Existing analytics, sentiment, lead, forecast, optimization, and posting pages retain their API-driven loading/error/empty behavior while receiving the new light theme and clearer data labels.
+
+### Tests and validation
+
+- Frontend tests: `9 passed`.
+- Frontend production build: passed; all 11 routes compiled and generated successfully.
+- Frontend lint: passed with three non-blocking existing warnings.
+- Phase 11 regression: `6 passed`.
+- Phase 10 regression: `2 passed`.
+- Relevant Phase 8/9 regression: `17 passed, 80 deselected`.
+- No backend or database changes were required for Phase 12.
+
+### Limitations
+
+- The current backend does not expose every requested campaign-level aggregate, sentiment history, or reward-history endpoint, so the UI shows truthful pending/unavailable states instead of inventing values.
+- Lint retains warnings for the existing Google Fonts link in `layout.tsx` and raw poster `<img>` elements; these are non-blocking and were not changed because poster URLs can be remote or local backend assets.
+- Browser screenshot validation and live external-platform validation were not performed in this environment.
+
+No Phase 13 work was started.
+

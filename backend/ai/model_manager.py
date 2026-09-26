@@ -76,7 +76,11 @@ class ModelManager:
     # ── Public async context manager ──────────────────────────────────────────
 
     @asynccontextmanager
-    async def session(self, model_key: str) -> AsyncIterator[BaseModelService]:
+    async def session(
+        self,
+        model_key: str,
+        runtime_config: Optional[dict] = None,
+    ) -> AsyncIterator[BaseModelService]:
         """
         Primary API for every AI service.
 
@@ -97,6 +101,8 @@ class ModelManager:
 
             # 2. Load the requested model
             service = self._get_or_create(model_key)
+            if runtime_config and hasattr(service, "configure_runtime"):
+                service.configure_runtime(runtime_config)
             if not service.is_loaded:
                 await self._load(model_key, service)
 

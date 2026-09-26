@@ -23,6 +23,8 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
+
 _TEST_DB_PATH = Path(tempfile.gettempdir()) / "nexmarket_test.db"
 
 
@@ -81,6 +83,16 @@ from sqlalchemy import create_engine
 _sync_engine = create_engine(f"sqlite:///{settings._sqlite_path()}")
 Base.metadata.drop_all(_sync_engine)
 Base.metadata.create_all(_sync_engine)
+
+
+@pytest.fixture(autouse=True)
+def isolate_test_database():
+    """Give every test a clean schema so ordering cannot leak persisted rows."""
+    Base.metadata.drop_all(_sync_engine)
+    Base.metadata.create_all(_sync_engine)
+    yield
+
+
 _sync_engine.dispose()
 
 

@@ -135,6 +135,7 @@ class Settings(BaseSettings):
     STATIC_BASE_URL: str = "http://localhost:8000/static"
     SDXL_INFERENCE_STEPS: int = 28
     SDXL_LORA_PATH: str = "./ml/lora/sdxl_poster_lora.safetensors"
+    SDXL_LORA_MIN_EXAMPLES: int = 8
 
     # ── ML ────────────────────────────────────────────────────────
     LSTM_MODEL_PATH: str = "./ml/lstm/engagement_lstm.pt"

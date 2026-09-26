@@ -199,18 +199,35 @@ class SocialPostingService:
         gets the fix automatically instead of needing to reproduce the
         ordering by hand.
         """
-        posts = [
-            SocialPost(
+        existing_rows = (await db.execute(
+            select(SocialPost).where(
+                SocialPost.campaign_id == campaign_id,
+                SocialPost.platform.in_(platforms),
+            )
+        )).scalars().all()
+        existing_by_platform = {}
+        for row in existing_rows:
+            if row.poster_id == poster_id and row.ad_copy_id == ad_copy_id:
+                existing_by_platform[row.platform] = row
+        posts = []
+        for platform in platforms:
+            existing = existing_by_platform.get(platform)
+            if existing is not None:
+                # Reuse posted, in-flight, and failed rows. The publish method
+                # can safely retry a failed row, while reusing posted/in-flight
+                # rows prevents a second platform call after an ambiguous run.
+                posts.append(existing)
+                continue
+            posts.append(SocialPost(
                 campaign_id=campaign_id,
                 platform=platform,
                 ad_copy_id=ad_copy_id,
                 poster_id=poster_id,
-                status="posting",
-            )
-            for platform in platforms
-        ]
+                status="pending",
+            ))
         for sp in posts:
-            db.add(sp)
+            if sp.id is None:
+                db.add(sp)
         await db.commit()
         for sp in posts:
             await db.refresh(sp)
@@ -239,6 +256,15 @@ class SocialPostingService:
         """
         for sp in posts:
             try:
+                if sp.status == "posted":
+                    logger.info("publish_skip_already_posted post_id=%s platform=%s", sp.id, sp.platform)
+                    continue
+                if sp.status == "posting" and not sp.platform_post_id:
+                    # A prior request may have reached the platform but lost
+                    # its response. Treat this as ambiguous, not retryable.
+                    await self._log(db, sp.id, "publish_ambiguous_skipped", {})
+                    await db.commit()
+                    continue
                 await self.publish(db, sp, text, image_url)
                 await db.commit()
             except Exception:

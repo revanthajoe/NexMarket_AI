@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.models import Campaign, ModelVersion, Poster, PosterEvaluation, PosterFeedback
 from app.schemas.schemas import PosterEvaluationRead, PosterFeedbackCreate, PosterFeedbackRead, PosterGenerateRequest, PosterRead
@@ -16,6 +17,7 @@ from app.services.ai.poster_evaluator import poster_evaluator
 from app.services.ai.poster_generator import poster_generator
 from app.services.model_metadata import active_model_version_id
 from app.services.poster_feedback import derive_improvement_instructions
+from app.services.sdxl_lora import active_sdxl_runtime
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/posters", tags=["Posters"])
@@ -61,6 +63,10 @@ async def generate_posters(
     await db.commit()
 
     results = []
+    if settings.IMAGE_PROVIDER == "local":
+        sdxl_model_version_id, sdxl_lora_path = await active_sdxl_runtime(db)
+    else:
+        sdxl_model_version_id, sdxl_lora_path = None, None
     for i in range(payload.variations):
         gen = None
         try:
@@ -69,6 +75,8 @@ async def generate_posters(
                 variation=i,
                 seed=(payload.seed + i) if payload.seed is not None else None,
                 language=payload.language,
+                sdxl_model_version_id=sdxl_model_version_id,
+                sdxl_lora_path=sdxl_lora_path,
             )
 
             poster = Poster(
@@ -78,6 +86,7 @@ async def generate_posters(
                 provider=gen["provider"],
                 variation_index=i,
                 metadata_=gen.get("metadata_"),
+                model_version_id=gen.get("model_version_id", sdxl_model_version_id),
             )
             db.add(poster)
             # Commit per variation: one short write transaction each, so a
@@ -240,6 +249,10 @@ async def regenerate_poster(poster_id: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Campaign not found")
 
     try:
+        if settings.IMAGE_PROVIDER == "local":
+            sdxl_model_version_id, sdxl_lora_path = await active_sdxl_runtime(db)
+        else:
+            sdxl_model_version_id, sdxl_lora_path = None, None
         gen = await poster_generator.generate(
             campaign_name=campaign.name,
             product_name=campaign.product_name,
@@ -252,6 +265,8 @@ async def regenerate_poster(poster_id: str, db: AsyncSession = Depends(get_db)):
             platform=campaign.preferred_platform or "instagram",
             campaign_id=campaign.id,
             language=(source.metadata_ or {}).get("language"),
+            sdxl_model_version_id=sdxl_model_version_id,
+            sdxl_lora_path=sdxl_lora_path,
         )
     except Exception as exc:
         logger.error("poster_regenerate_error poster_id=%s error=%s", poster_id, exc, exc_info=True)
@@ -275,6 +290,7 @@ async def regenerate_poster(poster_id: str, db: AsyncSession = Depends(get_db)):
         generation_reason="feedback_regeneration",
         improvement_instruction=improvement_instruction,
         metadata_=gen.get("metadata_", {}),
+        model_version_id=gen.get("model_version_id", sdxl_model_version_id),
     )
     db.add(regenerated)
     await db.flush()

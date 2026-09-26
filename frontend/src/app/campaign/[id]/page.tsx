@@ -14,6 +14,7 @@ import {
   SocialPost, Forecast, Optimization, BrandKitInfo,
 } from "@/lib/api";
 import { AdCopyTab, PostingTab } from "@/components/campaign/CampaignTabs";
+import { CampaignPipelineStatus, PipelineStage } from "@/components/campaign/CampaignPipelineStatus";
 
 // Dynamic imports for heavy chart components — split from main bundle
 const PosterRadarChart = dynamic(
@@ -185,6 +186,24 @@ export default function CampaignDetailPage() {
   );
   if (!campaign) return <p className="text-slate-500">Campaign not found.</p>;
 
+  const hasPoster = posters.length > 0;
+  const hasEvaluation = Boolean(eval_);
+  const hasAdCopy = copies.length > 0;
+  const hasPublishedPost = posts.some((post) => post.status === "posted");
+  const hasPendingPost = posts.some((post) => ["pending", "posting", "scheduled"].includes(post.status));
+  const pipelineStages: PipelineStage[] = [
+    { label: "Create", state: "complete", note: "campaign saved" },
+    { label: "Generate", state: hasPoster ? "complete" : campaign.status === "generating" ? "active" : "pending" },
+    { label: "Evaluate", state: hasEvaluation ? "complete" : hasPoster ? "pending" : "unavailable" },
+    { label: "Improve", state: posters.length > 1 ? "complete" : "pending", note: posters.length > 1 ? `${posters.length} versions` : "feedback optional" },
+    { label: "Publish", state: hasPublishedPost ? "complete" : hasPendingPost ? "active" : "pending" },
+    { label: "Observe", state: "pending", note: "ACTUAL data only" },
+    { label: "Analyze", state: "pending", note: "awaiting eligible data" },
+    { label: "Predict", state: "pending", note: "PREDICTED" },
+    { label: "Optimize", state: "pending", note: "RECOMMENDATION" },
+    { label: "Reward", state: "pending", note: "ACTUAL outcome required" },
+  ];
+
   return (
     <div className="space-y-6">
       {/* Campaign Header */}
@@ -192,10 +211,10 @@ export default function CampaignDetailPage() {
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-3 mb-2">
-              <h1 className="text-xl font-bold text-white">{campaign.name}</h1>
+              <h1 className="text-xl font-bold text-slate-900">{campaign.name}</h1>
               <StatusBadge status={campaign.status} />
             </div>
-            <p className="text-sm text-slate-400">{campaign.product_name} · {campaign.campaign_goal} · {campaign.preferred_platform}</p>
+            <p className="text-sm text-slate-600">{campaign.product_name} · {campaign.campaign_goal} · {campaign.preferred_platform}</p>
           </div>
           <button
             onClick={runPipeline}
@@ -222,6 +241,8 @@ export default function CampaignDetailPage() {
           </div>
         )}
       </div>
+
+      <CampaignPipelineStatus stages={pipelineStages} />
 
       {/* Tabs */}
       <div className="flex gap-1 border-b border-surface-border pb-1">

@@ -215,7 +215,7 @@ LANGUAGE_NAMES: dict[str, str] = {
 # and normalize_brochure_spec() clamps to them so a model that ignores the
 # instruction still cannot overflow its layout zone.
 BROCHURE_WORD_BUDGETS = {
-    "headline":    10,
+    "headline":    6,
     "subheadline": 15,
     "label":       5,
     "value":       5,
@@ -518,11 +518,13 @@ def _as_text(value, budget: int) -> str:
     """Coerce any JSON value to a clean single-line string within `budget` words."""
     if value is None:
         return ""
+    if budget is not None and budget <= 0:
+        return ""
     if isinstance(value, (list, tuple)):
         value = " ".join(str(v) for v in value)
-    text = " ".join(str(value).split())          # collapse newlines/runs of spaces
-    words = text.split(" ")
-    if len(words) > budget:
+    text = " ".join(str(value).split())
+    words = text.split()
+    if budget is not None and len(words) > budget:
         text = " ".join(words[:budget])
     return text.strip()
 
@@ -545,7 +547,7 @@ def _fallback_spec(ctx: dict) -> dict:
     b       = BROCHURE_WORD_BUDGETS
     product = _as_text(ctx.get("product_name", "Our Product"), b["headline"])
     description = _as_text(ctx.get("description", ""), b["subheadline"])
-    audience = _as_text(ctx.get("target_audience", ""), b["why_item"])
+    audience = _as_text(ctx.get("target_audience", ""), b["why_item"]) or "your audience"
     offer   = _as_text(normalize_offer_text(ctx.get("offer", "")), b["offer"])
     features = [
         {"label_en": product, "value": "FEATURE"},
@@ -646,6 +648,23 @@ def normalize_brochure_spec(raw, ctx: Optional[dict] = None) -> dict:
 
     if normalize_offer_text(ctx.get("offer", "")) and offer_en == _as_text(ctx.get("offer", ""), b["offer"]):
         offer_en = offer_local = normalize_offer_text(ctx["offer"])
+
+    headline_en = _as_text(headline_en, b["headline"])
+    headline_local = _as_text(headline_local, b["headline"])
+    subheadline_en = _as_text(subheadline_en, b["subheadline"])
+    subheadline_local = _as_text(subheadline_local, b["subheadline"])
+    why_title_en = _as_text(why_title_en, b["why_title"])
+    why_title_local = _as_text(why_title_local, b["why_title"])
+    offer_en = _as_text(offer_en, b["offer"])
+    offer_local = _as_text(offer_local, b["offer"])
+    for feature in features:
+        feature["label_en"] = _as_text(feature.get("label_en", ""), b["label"])
+        feature["label_local"] = _as_text(feature.get("label_local", feature.get("label_en", "")), b["label"])
+        feature["value"] = _as_text(feature.get("value", ""), b["value"])
+    why_en = [_as_text(item, b["why_item"]) for item in why_en]
+    why_local = [_as_text(item, b["why_item"]) for item in why_local]
+    why_en = [item for item in why_en if item][:WHY_ITEM_COUNT]
+    why_local = [item for item in why_local if item][:WHY_ITEM_COUNT]
 
     return {
         "language":           ctx.get("language", "en"),

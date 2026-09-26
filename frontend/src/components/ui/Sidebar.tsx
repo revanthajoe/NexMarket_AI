@@ -31,7 +31,7 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="w-64 flex-shrink-0 flex flex-col border-r border-surface-border bg-surface-card">
+    <aside className="w-64 flex-shrink-0 flex flex-col border-r border-surface-border bg-white/80 backdrop-blur-xl">
       {/* Logo */}
       <div className="p-6 border-b border-surface-border">
         <div className="flex items-center gap-3">
@@ -39,7 +39,7 @@ export function Sidebar() {
             <Zap size={18} className="text-white" />
           </div>
           <div>
-            <p className="font-bold text-white text-sm leading-none">NexMarket</p>
+            <p className="font-bold text-slate-800 text-sm leading-none">NexMarket</p>
             <p className="text-xs text-brand-400 mt-0.5">AI Platform</p>
           </div>
         </div>
@@ -58,14 +58,14 @@ export function Sidebar() {
                 "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 group",
                 active
                   ? "bg-brand-500/20 text-brand-300 border border-brand-500/30"
-                  : "text-slate-400 hover:text-slate-200 hover:bg-surface-muted"
+                  : "text-slate-600 hover:text-slate-900 hover:bg-surface-muted"
               )}
             >
               <Icon
                 size={16}
                 className={clsx(
                   "flex-shrink-0 transition-colors",
-                  active ? "text-brand-400" : "text-slate-500 group-hover:text-slate-300"
+                  active ? "text-brand-600" : "text-slate-400 group-hover:text-slate-700"
                 )}
               />
               {label}
@@ -80,7 +80,7 @@ export function Sidebar() {
       {/* Footer */}
       <div className="p-4 border-t border-surface-border">
         <div className="glass rounded-lg p-3">
-          <p className="text-xs text-slate-400 font-medium">Demo Mode</p>
+          <p className="text-xs text-slate-700 font-medium">Demo Mode</p>
           <p className="text-xs text-slate-500 mt-0.5">Mock posting active</p>
           <div className="mt-2 flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />

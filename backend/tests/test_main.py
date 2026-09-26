@@ -275,26 +275,27 @@ async def test_adcopy_generate_missing_campaign(client):
 # ── Forecasting (LSTM) ────────────────────────────────────────────────────────
 
 async def _seed_actual_history(client, campaign_id: str, count: int = 14):
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import AnalyticsEvent
+
     start = datetime(2026, 1, 1)
-    for offset in range(count):
-        response = await client.post(
-            "/api/v1/n8n/analytics/ingest",
-            json={
-                "campaign_id": campaign_id,
-                "platform": "instagram",
-                "event_date": (start + timedelta(days=offset)).isoformat(),
-                "impressions": 100 + offset,
-                "clicks": 10 + offset,
-                "likes": 8 + offset,
-                "shares": 2,
-                "comments": 1,
-                "reach": 80 + offset,
-                "ctr": 0.1,
-                "source_type": "ACTUAL",
-                "source_system": "test",
-            },
-        )
-        assert response.status_code == 200
+    async with AsyncSessionLocal() as db:
+        for offset in range(count):
+            db.add(AnalyticsEvent(
+                campaign_id=campaign_id,
+                platform="instagram",
+                event_date=start + timedelta(days=offset),
+                impressions=100 + offset,
+                clicks=10 + offset,
+                likes=8 + offset,
+                shares=2,
+                comments=1,
+                reach=80 + offset,
+                ctr=0.1,
+                source_type="ACTUAL",
+                source_system="test_fixture",
+            ))
+        await db.commit()
 
 @pytest.mark.asyncio
 async def test_forecast_create(client):
@@ -1781,49 +1782,32 @@ def test_sdxl_encode_long_prompt_concatenates_both_encoders():
 # POST /trigger/campaign response is received.
 
 @pytest.mark.asyncio
-async def test_pipeline_step_sentiment_creates_db_record(client):
-    """
-    The 'sentiment' pipeline step must call sentiment_service.analyze() and
-    persist at least one SentimentResult row for the campaign.
-    """
+async def test_pipeline_step_sentiment_skips_without_actual_comment_text(client):
+    """No synthetic campaign text may become sentiment input in the learning loop."""
     from sqlalchemy import select
 
     from app.db.session import AsyncSessionLocal
     from app.models.models import SentimentResult
 
     cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
-    assert cr.status_code == 201
     cid = cr.json()["id"]
-    await _seed_actual_history(client, cid)
-
     r = await client.post(
         "/api/v1/n8n/trigger/campaign",
         json={"campaign_id": cid, "steps": ["sentiment"]},
     )
     assert r.status_code == 200
-    assert r.json()["status"] == "accepted"
-
     async with AsyncSessionLocal() as db:
         rows = (
             await db.execute(
                 select(SentimentResult).where(SentimentResult.campaign_id == cid)
             )
         ).scalars().all()
-
-    assert rows, "pipeline 'sentiment' step must create at least one SentimentResult row"
-    for row in rows:
-        assert row.label in ("positive", "negative", "neutral"), (
-            f"unexpected label: {row.label!r}"
-        )
-        assert 0.0 <= row.confidence <= 1.0
-        assert row.model_used, "model_used must not be empty"
+    assert rows == [], "sentiment must not fabricate campaign-copy results"
 
 
 @pytest.mark.asyncio
 async def test_pipeline_step_sentiment_is_idempotent(client):
-    """Triggering 'sentiment' twice for the same campaign must not create
-    duplicate rows — the idempotency guard in run_pipeline() skips the step
-    when rows already exist."""
+    """Triggering 'sentiment' twice must not duplicate a predicted result."""
     from sqlalchemy import select
 
     from app.db.session import AsyncSessionLocal
@@ -1831,6 +1815,17 @@ async def test_pipeline_step_sentiment_is_idempotent(client):
 
     cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
     cid = cr.json()["id"]
+
+    async with AsyncSessionLocal() as db:
+        db.add(SentimentResult(
+            campaign_id=cid,
+            text="The product is useful and easy to recommend.",
+            label="positive",
+            model_used="actual_comment",
+            source_type="ACTUAL",
+            input_source_type="ACTUAL",
+        ))
+        await db.commit()
 
     for _ in range(2):
         await client.post(
@@ -1845,12 +1840,9 @@ async def test_pipeline_step_sentiment_is_idempotent(client):
             )
         ).scalars().all()
 
-    # The exact count equals the number of texts the pipeline builds from the
-    # campaign (name / description / offer / product+audience). The important
-    # thing is that a *second* trigger does not double the row count.
     first_count = len(rows)
-    assert first_count > 0, "must have rows after first run"
-    # Re-trigger: should be a no-op
+    assert first_count == 2, "one actual comment should produce one prediction"
+
     await client.post(
         "/api/v1/n8n/trigger/campaign",
         json={"campaign_id": cid, "steps": ["sentiment"]},
@@ -1870,7 +1862,7 @@ async def test_pipeline_step_sentiment_is_idempotent(client):
 async def test_pipeline_step_lead_prediction_creates_db_record(client):
     """
     The 'lead_prediction' pipeline step must call lead_prediction_service.predict()
-    and persist one LeadScore row (with lead_identifier='pipeline_baseline').
+    and persist one ACTUAL-signal LeadScore row.
     """
     from sqlalchemy import select
 
@@ -1897,7 +1889,7 @@ async def test_pipeline_step_lead_prediction_creates_db_record(client):
 
     assert rows, "pipeline 'lead_prediction' step must create a LeadScore row"
     row = rows[0]
-    assert row.lead_identifier == "pipeline_baseline"
+    assert row.lead_identifier == "pipeline_actual_signal"
     assert 0.0 <= row.score <= 100.0, f"score out of range: {row.score}"
     assert row.category in ("hot", "warm", "cold"), f"unexpected category: {row.category!r}"
     assert 0.0 <= row.purchase_probability <= 1.0
@@ -1905,7 +1897,7 @@ async def test_pipeline_step_lead_prediction_creates_db_record(client):
 
 @pytest.mark.asyncio
 async def test_pipeline_step_lead_prediction_is_idempotent(client):
-    """Re-triggering 'lead_prediction' must not create a second baseline row."""
+    """Re-triggering 'lead_prediction' must not create a second actual-signal row."""
     from sqlalchemy import select
 
     from app.db.session import AsyncSessionLocal
@@ -1913,6 +1905,7 @@ async def test_pipeline_step_lead_prediction_is_idempotent(client):
 
     cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
     cid = cr.json()["id"]
+    await _seed_actual_history(client, cid)
 
     for _ in range(2):
         await client.post(
@@ -1928,8 +1921,9 @@ async def test_pipeline_step_lead_prediction_is_idempotent(client):
         ).scalars().all()
 
     assert len(rows) == 1, (
-        f"expected exactly 1 baseline LeadScore, got {len(rows)}"
+        f"expected exactly 1 actual-signal LeadScore, got {len(rows)}"
     )
+    assert rows[0].lead_identifier == "pipeline_actual_signal"
 
 
 @pytest.mark.asyncio
@@ -2011,9 +2005,9 @@ async def test_pipeline_all_three_new_steps_produce_records(client):
     executed together (without poster/adcopy/optimize/post to keep it fast).
 
     After triggering steps=[sentiment, lead_prediction, forecast] on the same
-    campaign, ALL THREE tables must have records:
+    campaign with actual inputs, ALL THREE tables must have records:
         - sentiment_results    ≥1 row
-        - lead_scores          ==1 row (pipeline_baseline)
+        - lead_scores          ==1 row (pipeline_actual_signal)
         - engagement_forecasts ==1 row (horizon_days=7)
 
     This mirrors the real pipeline order that was missing from run_pipeline()
@@ -2028,6 +2022,16 @@ async def test_pipeline_all_three_new_steps_produce_records(client):
     assert cr.status_code == 201
     cid = cr.json()["id"]
     await _seed_actual_history(client, cid)
+    async with AsyncSessionLocal() as db:
+        db.add(SentimentResult(
+            campaign_id=cid,
+            text="The product is useful and easy to recommend.",
+            label="positive",
+            model_used="actual_comment",
+            source_type="ACTUAL",
+            input_source_type="ACTUAL",
+        ))
+        await db.commit()
 
     r = await client.post(
         "/api/v1/n8n/trigger/campaign",
@@ -2069,7 +2073,7 @@ async def test_pipeline_all_three_new_steps_produce_records(client):
         "lead_scores: no rows found after pipeline run — "
         "lead_prediction step was not executed or failed silently"
     )
-    assert lead_rows[0].lead_identifier == "pipeline_baseline"
+    assert lead_rows[0].lead_identifier == "pipeline_actual_signal"
 
     # engagement_forecasts
     assert forecast_rows, (

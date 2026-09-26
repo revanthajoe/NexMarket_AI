@@ -12,7 +12,7 @@ export default function LeadsAndSentimentPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+        <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
             <Target size={20} className="text-brand-400" />
           </div>
@@ -58,7 +58,7 @@ function LeadScoringSection() {
 
   const [form, setForm] = useState({
     campaign_id: "",
-    lead_identifier: "user_" + Math.floor(Math.random() * 10000),
+    lead_identifier: "manual-lead",
     clicks: 12,
     views: 45,
     time_spent_seconds: 120,
@@ -103,7 +103,7 @@ function LeadScoringSection() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
       <div className="glass rounded-2xl p-6 border border-surface-border">
-        <h2 className="text-lg font-semibold text-white mb-4">Input Lead Metrics</h2>
+        <h2 className="text-lg font-semibold text-slate-800 mb-4">Input Lead Metrics</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label htmlFor="lead-campaign" className="text-xs font-medium text-slate-400 uppercase tracking-wide">Campaign</label>
@@ -164,7 +164,7 @@ function LeadScoringSection() {
       </div>
 
       <div className="glass rounded-2xl p-6 border border-surface-border">
-        <h2 className="text-lg font-semibold text-white mb-4">XGBoost Prediction</h2>
+        <h2 className="text-lg font-semibold text-slate-800 mb-4">XGBoost Prediction</h2>
         {!result ? (
           <div className="h-48 flex items-center justify-center text-slate-500 text-sm border border-dashed border-surface-border rounded-xl">
             Submit metrics to view AI prediction
@@ -186,7 +186,7 @@ function LeadScoringSection() {
               </div>
               <div className="flex-1">
                 <div className="flex justify-between items-center mb-2">
-                  <span className="text-sm font-medium text-white capitalize">{result.category} Lead</span>
+                  <span className="text-sm font-medium text-slate-800 capitalize">{result.category} Lead</span>
                   <span className="text-sm text-brand-300">{(result.purchase_probability * 100).toFixed(1)}% Conversion</span>
                 </div>
                 <div className="h-3 bg-surface-muted rounded-full overflow-hidden">
@@ -256,7 +256,7 @@ function SentimentSection() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
       <div className="glass rounded-2xl p-6 border border-surface-border">
-        <h2 className="text-lg font-semibold text-white mb-4">Analyze Customer Feedback</h2>
+        <h2 className="text-lg font-semibold text-slate-800 mb-4">Analyze Customer Feedback</h2>
         <div className="space-y-4">
           <div className="space-y-1.5">
             <label htmlFor="sentiment-texts" className="text-xs font-medium text-slate-400 uppercase tracking-wide">Feedback Texts (One per line)</label>
@@ -277,7 +277,7 @@ function SentimentSection() {
       </div>
 
       <div className="glass rounded-2xl p-6 border border-surface-border">
-        <h2 className="text-lg font-semibold text-white mb-4">Sentiment Results</h2>
+        <h2 className="text-lg font-semibold text-slate-800 mb-4">Sentiment Results</h2>
         {!result ? (
           <div className="h-48 flex items-center justify-center text-slate-500 text-sm border border-dashed border-surface-border rounded-xl">
             Run analysis to see model output
@@ -302,7 +302,7 @@ function SentimentSection() {
             <div className="space-y-3 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
               {result.results.map((r, i) => (
                 <div key={i} className="p-3 bg-surface-muted/30 border border-surface-border rounded-lg space-y-2">
-                  <p className="text-sm text-slate-300">"{r.text}"</p>
+                  <p className="text-sm text-slate-300">&quot;{r.text}&quot;</p>
                   <div className="flex items-center gap-3">
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                       r.label === 'positive' ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' :

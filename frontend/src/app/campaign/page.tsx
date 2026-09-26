@@ -5,6 +5,7 @@ import Link from "next/link";
 import { api, Campaign } from "@/lib/api";
 import { Loader2, Megaphone, Plus, ExternalLink } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
+import { ProvenanceBadge } from "@/components/ui/ProvenanceBadge";
 
 const STATUS_BADGE: Record<string, string> = {
   draft:      "badge-pending",
@@ -36,7 +37,7 @@ export default function CampaignsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-white">Campaigns</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Campaigns</h1>
           <p className="text-slate-400 text-sm mt-1">Manage all your marketing campaigns</p>
         </div>
         <Link href="/campaign/new"
@@ -68,22 +69,23 @@ export default function CampaignsPage() {
               <div className="flex items-center justify-between">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-3 mb-1">
-                    <h3 className="font-semibold text-white truncate">{c.name}</h3>
+                    <h3 className="font-semibold text-slate-800 truncate">{c.name}</h3>
                     <span className={`text-xs px-2 py-0.5 rounded-full flex-shrink-0 ${STATUS_BADGE[c.status] || "badge-pending"}`}>
                       {c.status}
                     </span>
                   </div>
-                  <p className="text-sm text-slate-400 truncate">{c.product_name}</p>
+                  <p className="text-sm text-slate-600 truncate">{c.product_name}</p>
                   <div className="flex items-center gap-4 mt-2">
-                    <span className="text-xs text-slate-500">{c.preferred_platform}</span>
+                    <span className="text-xs text-slate-600">{c.preferred_platform}</span>
                     <span className="text-xs text-slate-500">·</span>
-                    <span className="text-xs text-slate-500">{c.campaign_goal.replace(/_/g, " ")}</span>
+                    <span className="text-xs text-slate-600">{c.campaign_goal.replace(/_/g, " ")}</span>
                     <span className="text-xs text-slate-500">·</span>
-                    <span className="text-xs text-slate-600">
+                    <span className="text-xs text-slate-500">
                       {formatDistanceToNow(new Date(c.created_at), { addSuffix: true })}
                     </span>
                   </div>
                 </div>
+                <ProvenanceBadge value={c.status === "posted" ? "ACTUAL" : "PENDING"} className="mr-3" />
                 <Link href={`/campaign/${c.id}`}
                   className="flex items-center gap-1.5 text-xs text-brand-400 hover:text-brand-300 
                              opacity-0 group-hover:opacity-100 transition-opacity ml-4">

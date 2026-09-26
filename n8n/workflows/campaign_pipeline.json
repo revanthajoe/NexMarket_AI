@@ -1,14 +1,11 @@
 {
-  "name": "NexMarket \u2014 Full Campaign Pipeline",
+  "name": "NexMarket — Full Campaign Pipeline",
   "nodes": [
     {
       "id": "1",
       "name": "Webhook Trigger",
       "type": "n8n-nodes-base.webhook",
-      "position": [
-        100,
-        300
-      ],
+      "position": [100, 300],
       "parameters": {
         "path": "nexmarket-campaign",
         "httpMethod": "POST",
@@ -19,285 +16,356 @@
       "id": "2",
       "name": "Validate Payload",
       "type": "n8n-nodes-base.if",
-      "position": [
-        300,
-        300
-      ],
+      "position": [300, 300],
       "parameters": {
         "conditions": {
-          "string": [
-            {
-              "value1": "={{ $json.campaign_id }}",
-              "operation": "isNotEmpty"
-            }
-          ]
+          "string": [{"value1": "={{ $json.campaign_id }}", "operation": "isNotEmpty"}]
         }
-      }
-    },
-    {
-      "id": "3",
-      "name": "Trigger Backend Pipeline",
-      "type": "n8n-nodes-base.httpRequest",
-      "position": [
-        500,
-        300
-      ],
-      "parameters": {
-        "method": "POST",
-        "url": "http://localhost:8000/api/v1/n8n/trigger/campaign",
-        "bodyType": "json",
-        "body": "={{ JSON.stringify({ campaign_id: $json.campaign_id, steps: ['poster','evaluate','adcopy','sentiment','lead_prediction','forecast','optimize','post'], platforms: $json.platforms }) }}",
-        "options": {
-          "response": {
-            "response": {
-              "neverError": true
-            }
-          }
-        }
-      }
-    },
-    {
-      "id": "4",
-      "name": "Wait 5s",
-      "type": "n8n-nodes-base.wait",
-      "position": [
-        700,
-        300
-      ],
-      "parameters": {
-        "amount": 5,
-        "unit": "seconds"
-      }
-    },
-    {
-      "id": "5",
-      "name": "Poll Pipeline Status",
-      "type": "n8n-nodes-base.httpRequest",
-      "position": [
-        900,
-        300
-      ],
-      "parameters": {
-        "method": "GET",
-        "url": "=http://localhost:8000/api/v1/n8n/status/{{ $('Webhook Trigger').item.json.campaign_id }}"
-      }
-    },
-    {
-      "id": "6",
-      "name": "Check If Complete",
-      "type": "n8n-nodes-base.if",
-      "position": [
-        1100,
-        300
-      ],
-      "parameters": {
-        "conditions": {
-          "string": [
-            {
-              "value1": "={{ $json.status }}",
-              "operation": "regex",
-              "value2": "^(posted|ready)$"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "7",
-      "name": "Respond Success",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "position": [
-        1300,
-        200
-      ],
-      "parameters": {
-        "responseCode": 200,
-        "responseBody": "={{ JSON.stringify({ status: 'pipeline_complete', campaign_id: $json.campaign_id }) }}"
-      }
-    },
-    {
-      "id": "8",
-      "name": "Respond Processing",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "position": [
-        1300,
-        400
-      ],
-      "parameters": {
-        "responseCode": 202,
-        "responseBody": "={{ JSON.stringify({ status: 'processing', campaign_id: $json.campaign_id }) }}"
       }
     },
     {
       "id": "9",
       "name": "Error Handler",
       "type": "n8n-nodes-base.respondToWebhook",
-      "position": [
-        500,
-        500
-      ],
+      "position": [300, 500],
       "parameters": {
         "responseCode": 400,
-        "responseBody": "{\"error\": \"Invalid payload \u2014 campaign_id required\"}"
+        "responseBody": "{\"error\": \"Invalid payload — campaign_id required\"}"
+      }
+    },
+    
+    {
+      "id": "3",
+      "name": "Trigger Creation",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [500, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.NEXMARKET_BACKEND_URL || 'http://localhost:8000') + '/api/v1/n8n/trigger/campaign' }}",
+        "bodyType": "json",
+        "body": "={{ JSON.stringify({ campaign_id: $('Webhook Trigger').item.json.campaign_id, steps: ['poster','evaluate','adcopy','optimize'], platforms: $('Webhook Trigger').item.json.platforms, execution_id: $execution.id }) }}",
+        "options": {"response": {"response": {"neverError": true}}}
+      }
+    },
+    {
+      "id": "4",
+      "name": "Wait Creation",
+      "type": "n8n-nodes-base.wait",
+      "position": [700, 300],
+      "parameters": {"amount": 5, "unit": "seconds"}
+    },
+    {
+      "id": "5",
+      "name": "Poll Creation Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.NEXMARKET_BACKEND_URL || 'http://localhost:8000') + '/api/v1/n8n/status/' + $('Webhook Trigger').item.json.campaign_id }}"
+      }
+    },
+    {
+      "id": "6",
+      "name": "Check Creation Complete",
+      "type": "n8n-nodes-base.if",
+      "position": [1100, 300],
+      "parameters": {
+        "conditions": {
+          "string": [{"value1": "={{ $json.status }}", "operation": "regex", "value2": "^(ready)$"}]
+        }
       }
     },
     {
       "id": "12",
-      "name": "Check If Failed",
+      "name": "Check Creation Failed",
       "type": "n8n-nodes-base.if",
-      "position": [
-        1100,
-        500
-      ],
+      "position": [1100, 500],
       "parameters": {
         "conditions": {
-          "string": [
-            {
-              "value1": "={{ $json.status }}",
-              "operation": "equal",
-              "value2": "failed"
-            }
-          ]
+          "string": [{"value1": "={{ $json.status }}", "operation": "equal", "value2": "failed"}]
         }
       }
     },
     {
-      "id": "13",
-      "name": "Check Timeout",
+      "id": "14",
+      "name": "Check Creation Timeout",
       "type": "n8n-nodes-base.if",
-      "position": [
-        1100,
-        700
-      ],
+      "position": [1300, 600],
       "parameters": {
         "conditions": {
-          "number": [
-            {
-              "value1": "={{ $runIndex }}",
-              "operation": "largerEqual",
-              "value2": 24
-            }
-          ]
+          "number": [{"value1": "={{ $runIndex }}", "operation": "largerEqual", "value2": 24}]
         }
+      }
+    },
+    {
+      "id": "15",
+      "name": "Respond Creation Timeout",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [1500, 700],
+      "parameters": {
+        "responseCode": 202,
+        "responseBody": "={{ JSON.stringify({ status: 'timeout', campaign_id: $('Webhook Trigger').item.json.campaign_id, stage: 'creation' }) }}"
+      }
+    },
+    
+    {
+      "id": "100",
+      "name": "Trigger Publish",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1300, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.NEXMARKET_BACKEND_URL || 'http://localhost:8000') + '/api/v1/n8n/trigger/campaign' }}",
+        "bodyType": "json",
+        "body": "={{ JSON.stringify({ campaign_id: $('Webhook Trigger').item.json.campaign_id, steps: ['post'], platforms: $('Webhook Trigger').item.json.platforms, execution_id: $execution.id }) }}",
+        "options": {"response": {"response": {"neverError": true}}}
+      }
+    },
+    {
+      "id": "101",
+      "name": "Wait Publish",
+      "type": "n8n-nodes-base.wait",
+      "position": [1500, 300],
+      "parameters": {"amount": 5, "unit": "seconds"}
+    },
+    {
+      "id": "102",
+      "name": "Poll Publish Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1700, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.NEXMARKET_BACKEND_URL || 'http://localhost:8000') + '/api/v1/n8n/status/' + $('Webhook Trigger').item.json.campaign_id }}"
+      }
+    },
+    {
+      "id": "103",
+      "name": "Check Publish Complete",
+      "type": "n8n-nodes-base.if",
+      "position": [1900, 300],
+      "parameters": {
+        "conditions": {
+          "string": [{"value1": "={{ $json.status }}", "operation": "equal", "value2": "posted"}]
+        }
+      }
+    },
+    {
+      "id": "104",
+      "name": "Check Publish Failed",
+      "type": "n8n-nodes-base.if",
+      "position": [1900, 500],
+      "parameters": {
+        "conditions": {
+          "string": [{"value1": "={{ $json.status }}", "operation": "equal", "value2": "failed"}]
+        }
+      }
+    },
+    {
+      "id": "105",
+      "name": "Check Publish Timeout",
+      "type": "n8n-nodes-base.if",
+      "position": [2100, 600],
+      "parameters": {
+        "conditions": {
+          "number": [{"value1": "={{ $runIndex }}", "operation": "largerEqual", "value2": 24}]
+        }
+      }
+    },
+    {
+      "id": "106",
+      "name": "Respond Publish Timeout",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [2300, 700],
+      "parameters": {
+        "responseCode": 202,
+        "responseBody": "={{ JSON.stringify({ status: 'timeout', campaign_id: $('Webhook Trigger').item.json.campaign_id, stage: 'publish' }) }}"
+      }
+    },
+    
+    {
+      "id": "200",
+      "name": "Wait Analytics",
+      "type": "n8n-nodes-base.wait",
+      "position": [2100, 300],
+      "parameters": {"amount": 5, "unit": "minutes"}
+    },
+    {
+      "id": "201",
+      "name": "Trigger Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2300, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.NEXMARKET_BACKEND_URL || 'http://localhost:8000') + '/api/v1/n8n/trigger/campaign' }}",
+        "bodyType": "json",
+        "body": "={{ JSON.stringify({ campaign_id: $('Webhook Trigger').item.json.campaign_id, steps: ['analytics'], execution_id: $execution.id }) }}",
+        "options": {"response": {"response": {"neverError": true}}}
+      }
+    },
+    {
+      "id": "202",
+      "name": "Trigger Learning",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2500, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ ($env.NEXMARKET_BACKEND_URL || 'http://localhost:8000') + '/api/v1/n8n/trigger/campaign' }}",
+        "bodyType": "json",
+        "body": "={{ JSON.stringify({ campaign_id: $('Webhook Trigger').item.json.campaign_id, steps: ['sentiment', 'lead_prediction', 'forecast', 'optimize', 'reward_sync'], execution_id: $execution.id }) }}",
+        "options": {"response": {"response": {"neverError": true}}}
+      }
+    },
+    {
+      "id": "203",
+      "name": "Respond Learning Pending",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [2700, 300],
+      "parameters": {
+        "responseCode": 202,
+        "responseBody": "={{ JSON.stringify({ status: 'learning_pending', campaign_id: $('Webhook Trigger').item.json.campaign_id }) }}"
+      }
+    }
+    ,
+    {
+      "id": "204",
+      "name": "Poll Analytics Availability",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [2500, 500],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ ($env.NEXMARKET_BACKEND_URL || 'http://localhost:8000') + '/api/v1/analytics/tracking/status?campaign_id=' + $('Webhook Trigger').item.json.campaign_id }}"
+      }
+    },
+    {
+      "id": "205",
+      "name": "Check Actual Analytics",
+      "type": "n8n-nodes-base.if",
+      "position": [2700, 500],
+      "parameters": {
+        "conditions": {
+          "boolean": [{"value1": "={{ $json.has_real_data === true }}", "operation": "isTrue"}]
+        }
+      }
+    },
+    {
+      "id": "206",
+      "name": "Check Analytics Timeout",
+      "type": "n8n-nodes-base.if",
+      "position": [2900, 700],
+      "parameters": {
+        "conditions": {
+          "number": [{"value1": "={{ $runIndex }}", "operation": "largerEqual", "value2": 36}]
+        }
+      }
+    },
+    {
+      "id": "207",
+      "name": "Wait Analytics Retry",
+      "type": "n8n-nodes-base.wait",
+      "position": [3100, 800],
+      "parameters": {"amount": 5, "unit": "minutes"}
+    },
+    {
+      "id": "208",
+      "name": "Respond Analytics Pending",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [3100, 650],
+      "parameters": {
+        "responseCode": 202,
+        "responseBody": "={{ JSON.stringify({ status: 'analytics_pending', campaign_id: $('Webhook Trigger').item.json.campaign_id }) }}"
       }
     }
   ],
   "connections": {
     "Webhook Trigger": {
-      "main": [
-        [
-          {
-            "node": "Validate Payload",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [ [ {"node": "Validate Payload", "type": "main", "index": 0} ] ]
     },
     "Validate Payload": {
       "main": [
-        [
-          {
-            "node": "Trigger Backend Pipeline",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Error Handler",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [ {"node": "Trigger Creation", "type": "main", "index": 0} ],
+        [ {"node": "Error Handler", "type": "main", "index": 0} ]
       ]
     },
-    "Trigger Backend Pipeline": {
+    "Trigger Creation": {
+      "main": [ [ {"node": "Wait Creation", "type": "main", "index": 0} ] ]
+    },
+    "Wait Creation": {
+      "main": [ [ {"node": "Poll Creation Status", "type": "main", "index": 0} ] ]
+    },
+    "Poll Creation Status": {
+      "main": [ [ {"node": "Check Creation Complete", "type": "main", "index": 0} ] ]
+    },
+    "Check Creation Complete": {
       "main": [
-        [
-          {
-            "node": "Wait 5s",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [ {"node": "Trigger Publish", "type": "main", "index": 0} ],
+        [ {"node": "Check Creation Failed", "type": "main", "index": 0} ]
       ]
     },
-    "Wait 5s": {
+    "Check Creation Failed": {
       "main": [
-        [
-          {
-            "node": "Poll Pipeline Status",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [ {"node": "Error Handler", "type": "main", "index": 0} ],
+        [ {"node": "Check Creation Timeout", "type": "main", "index": 0} ]
       ]
     },
-    "Poll Pipeline Status": {
+    "Check Creation Timeout": {
       "main": [
-        [
-          {
-            "node": "Check If Complete",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [ {"node": "Respond Creation Timeout", "type": "main", "index": 0} ],
+        [ {"node": "Wait Creation", "type": "main", "index": 0} ]
       ]
     },
-    "Check If Complete": {
+    "Trigger Publish": {
+      "main": [ [ {"node": "Wait Publish", "type": "main", "index": 0} ] ]
+    },
+    "Wait Publish": {
+      "main": [ [ {"node": "Poll Publish Status", "type": "main", "index": 0} ] ]
+    },
+    "Poll Publish Status": {
+      "main": [ [ {"node": "Check Publish Complete", "type": "main", "index": 0} ] ]
+    },
+    "Check Publish Complete": {
       "main": [
-        [
-          {
-            "node": "Respond Success",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Check If Failed",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [ {"node": "Wait Analytics", "type": "main", "index": 0} ],
+        [ {"node": "Check Publish Failed", "type": "main", "index": 0} ]
       ]
     },
-    "Check If Failed": {
+    "Check Publish Failed": {
       "main": [
-        [
-          {
-            "node": "Error Handler",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Check Timeout",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [ {"node": "Error Handler", "type": "main", "index": 0} ],
+        [ {"node": "Check Publish Timeout", "type": "main", "index": 0} ]
       ]
     },
-    "Check Timeout": {
+    "Check Publish Timeout": {
       "main": [
-        [
-          {
-            "node": "Respond Processing",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Wait 5s",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [ {"node": "Respond Publish Timeout", "type": "main", "index": 0} ],
+        [ {"node": "Wait Publish", "type": "main", "index": 0} ]
       ]
+    },
+    "Wait Analytics": {
+      "main": [ [ {"node": "Trigger Analytics", "type": "main", "index": 0} ] ]
+    },
+    "Trigger Analytics": {
+      "main": [ [ {"node": "Poll Analytics Availability", "type": "main", "index": 0} ] ]
+    },
+    "Poll Analytics Availability": {
+      "main": [ [ {"node": "Check Actual Analytics", "type": "main", "index": 0} ] ]
+    },
+    "Check Actual Analytics": {
+      "main": [
+        [ {"node": "Trigger Learning", "type": "main", "index": 0} ],
+        [ {"node": "Check Analytics Timeout", "type": "main", "index": 0} ]
+      ]
+    },
+    "Check Analytics Timeout": {
+      "main": [
+        [ {"node": "Respond Analytics Pending", "type": "main", "index": 0} ],
+        [ {"node": "Wait Analytics Retry", "type": "main", "index": 0} ]
+      ]
+    },
+    "Wait Analytics Retry": {
+      "main": [ [ {"node": "Trigger Analytics", "type": "main", "index": 0} ] ]
+    },
+    "Trigger Learning": {
+      "main": [ [ {"node": "Respond Learning Pending", "type": "main", "index": 0} ] ]
     }
   },
   "settings": {

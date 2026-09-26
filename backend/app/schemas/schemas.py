@@ -79,6 +79,7 @@ class PosterRead(BaseModel):
     version: int = 1
     generation_reason: Optional[str] = None
     improvement_instruction: Optional[str] = None
+    model_version_id: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -344,6 +345,7 @@ class PostStatusRead(BaseModel):
 
 class N8nTriggerCampaign(BaseModel):
     campaign_id: str
+    execution_id: Optional[str] = None
     steps: List[str] = Field(
         # Full pipeline order — each step only runs when its name is present.
         # Logical dependency order:
@@ -359,6 +361,8 @@ class N8nTriggerCampaign(BaseModel):
             "forecast",
             "optimize",
             "post",
+            "analytics",
+            "reward_sync",
         ]
     )
     # Which platforms the "post" step publishes to. None (the default) falls

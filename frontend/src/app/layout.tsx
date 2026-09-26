@@ -28,9 +28,9 @@ export default function RootLayout({
           href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
         />
       </head>
-      <body className="bg-surface text-slate-200 flex h-screen overflow-hidden">
+      <body className="bg-surface text-slate-700 flex h-screen overflow-hidden ambient-background">
         <Sidebar />
-        <main className="flex-1 overflow-y-auto bg-surface">
+        <main className="flex-1 overflow-y-auto bg-surface/80">
           <div className="max-w-7xl mx-auto p-6 animate-fade-in">
             {children}
           </div>

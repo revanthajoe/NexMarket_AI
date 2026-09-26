@@ -70,7 +70,7 @@ export default function PostingStudioPage() {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-white flex items-center gap-3">
+        <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
             <Send size={20} className="text-brand-400" />
           </div>
@@ -99,7 +99,7 @@ export default function PostingStudioPage() {
 
           <div className="glass-dynamic rounded-xl p-5 animate-fade-in-up delay-100">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-white">Post Timeline</h2>
+              <h2 className="text-lg font-semibold text-slate-800">Post Timeline</h2>
               <button
                 onClick={handleSyncMetrics}
                 disabled={syncing || !selectedCampaign}
@@ -122,7 +122,7 @@ export default function PostingStudioPage() {
                     <div className="flex items-center gap-3">
                       <span className="text-xl">{icons[p.status] || "🔄"}</span>
                       <div>
-                        <p className="text-sm font-medium text-white capitalize">{p.platform}</p>
+                        <p className="text-sm font-medium text-slate-800 capitalize">{p.platform}</p>
                         <p className="text-xs text-slate-500">
                           {new Date(p.created_at).toLocaleString()} {p.is_mock && <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] badge-mock">Mock</span>}
                         </p>

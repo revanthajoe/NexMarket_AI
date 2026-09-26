@@ -209,24 +209,27 @@ async def get_tracking_status(
         func.max(AnalyticsEvent.synced_at),
         func.max(AnalyticsEvent.event_date),
         func.sum(func.cast(AnalyticsEvent.is_mock, Integer)),
+        func.sum(func.cast(AnalyticsEvent.source_type == "ACTUAL", Integer)),
     )
     posts_stmt = select(func.count(SocialPost.id)).where(SocialPost.status == "posted")
     if campaign_id:
         stmt = stmt.where(AnalyticsEvent.campaign_id == campaign_id)
         posts_stmt = posts_stmt.where(SocialPost.campaign_id == campaign_id)
 
-    total, last_synced, last_event, mock_count = (await db.execute(stmt)).one()
+    total, last_synced, last_event, mock_count, actual_count = (await db.execute(stmt)).one()
     published_posts = (await db.execute(posts_stmt)).scalar() or 0
 
     total = int(total or 0)
     mock_count = int(mock_count or 0)
+    actual_count = int(actual_count or 0)
 
     return {
         "campaign_id": campaign_id,
         "event_count": total,
         "published_posts": published_posts,
         "mock_event_count": mock_count,
-        "has_real_data": total > mock_count,
+        "actual_event_count": actual_count,
+        "has_real_data": actual_count > 0,
         "last_synced_at": last_synced.isoformat() if hasattr(last_synced, "isoformat") else last_synced,
         "last_event_at": last_event.isoformat() if hasattr(last_event, "isoformat") else last_event,
     }

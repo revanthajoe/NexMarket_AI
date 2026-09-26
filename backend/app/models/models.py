@@ -103,6 +103,7 @@ class TrainingDataset(Base):
     record_count: Mapped[Optional[int]] = mapped_column(Integer)
     data_hash: Mapped[Optional[str]] = mapped_column(String(128))
     provenance_policy: Mapped[Optional[str]] = mapped_column(String(50))
+    manifest: Mapped[Optional[dict]] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="REGISTERED")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -230,6 +231,9 @@ class Poster(Base):
     generation_reason: Mapped[Optional[str]] = mapped_column(String(100))
     improvement_instruction: Mapped[Optional[str]] = mapped_column(Text)
     metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSON)
+    model_version_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("model_versions.id", ondelete="SET NULL")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     campaign: Mapped["Campaign"] = relationship(back_populates="posters")

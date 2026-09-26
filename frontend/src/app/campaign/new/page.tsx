@@ -26,7 +26,7 @@ const Field = ({ label, htmlFor, required, error, children }: {
 
 const Section = ({ title, children }: { title: string, children: React.ReactNode }) => (
   <div className="glass-dynamic rounded-2xl p-6 border border-surface-border animate-fade-in-up">
-    <h2 className="text-lg font-semibold text-white mb-4">{title}</h2>
+    <h2 className="text-lg font-semibold text-slate-800 mb-4">{title}</h2>
     <div className="space-y-4">
       {children}
     </div>
@@ -131,7 +131,7 @@ export default function NewCampaignPage() {
         <div className="flex items-center gap-2 text-sm text-slate-500 mb-4">
           <span>Dashboard</span><ChevronRight size={14} /><span className="text-slate-300">New Campaign</span>
         </div>
-        <h1 className="text-2xl font-bold text-white flex items-center gap-3">
+        <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
             <Megaphone size={20} className="text-brand-400" />
           </div>
@@ -284,7 +284,7 @@ export default function NewCampaignPage() {
         {/* Auto-run toggle */}
         <div className="glass rounded-xl p-4 border border-surface-border flex items-center justify-between">
           <div>
-            <p className="text-sm font-semibold text-white">🤖 Auto-run full AI pipeline</p>
+            <p className="text-sm font-semibold text-slate-800">Auto-run full AI pipeline</p>
             <p className="text-xs text-slate-500 mt-0.5">
               Generate poster, ad copy, forecast, optimize and post automatically
             </p>

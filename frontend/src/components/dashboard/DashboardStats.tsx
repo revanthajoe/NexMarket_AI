@@ -30,8 +30,8 @@ function StatCard({
         </div>
         <ArrowUpRight size={14} className="text-slate-500" />
       </div>
-      <p className="text-2xl font-bold text-white">{value}</p>
-      <p className="text-sm text-slate-400 mt-1">{label}</p>
+      <p className="text-2xl font-bold text-slate-900">{value}</p>
+      <p className="text-sm text-slate-600 mt-1">{label}</p>
       {sub && <p className="text-xs text-slate-500 mt-1">{sub}</p>}
     </div>
   );
