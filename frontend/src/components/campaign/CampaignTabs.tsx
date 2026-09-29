@@ -10,12 +10,11 @@ import {
 
 export const AD_COPY_PLATFORMS = ["instagram", "facebook", "telegram", "whatsapp", "email"];
 
-// Kept in sync with backend SUPPORTED_PLATFORMS (posting_service.py).
 export const POSTING_PLATFORMS = ["instagram", "facebook", "telegram", "whatsapp"];
 
 const PLATFORM_COLORS: Record<string, string> = {
-  instagram: "text-pink-400", facebook: "text-blue-400",
-  telegram: "text-sky-400", whatsapp: "text-emerald-400", email: "text-amber-400",
+  instagram: "text-rose-500", facebook: "text-blue-600",
+  telegram: "text-sky-500", whatsapp: "text-emerald-500", email: "text-amber-500",
 };
 
 export function AdCopyTab({ copies, campaignId, onGenerate, loading }: {
@@ -30,14 +29,13 @@ export function AdCopyTab({ copies, campaignId, onGenerate, loading }: {
 
   useEffect(() => {
     api.brandKit.get(campaignId)
-      .then(kit => { if (kit.language) setLanguage(kit.language); })
+      .then((kit) => { if (kit.language) setLanguage(kit.language); })
       .catch(() => { /* no kit yet */ });
   }, [campaignId]);
 
-  // Deduplicate copies, keeping only the latest per platform
   const uniqueCopies = useMemo(() => {
     const latest = new Map<string, AdCopy>();
-    copies.forEach(c => latest.set(c.platform, c));
+    copies.forEach((c) => latest.set(c.platform, c));
     return Array.from(latest.values());
   }, [copies]);
 
@@ -67,100 +65,101 @@ export function AdCopyTab({ copies, campaignId, onGenerate, loading }: {
 
   return (
     <div className="space-y-4">
-      {/* Controls */}
-      <div className="glass-dynamic rounded-xl p-4 flex flex-wrap items-end gap-4">
-        <div className="space-y-1">
-          <label htmlFor="adcopy-tone" className="block text-xs text-slate-400 font-medium">Tone</label>
-          <select id="adcopy-tone" name="adcopy-tone" value={tone} onChange={e => setTone(e.target.value)}
-            className="bg-surface-muted border border-surface-border rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-brand-400">
-            {AD_COPY_TONES.map(t => (
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-wrap items-end gap-4 animate-fade-in-up">
+        <div className="space-y-1.5 min-w-[140px]">
+          <label htmlFor="adcopy-tone" className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Tone</label>
+          <select id="adcopy-tone" name="adcopy-tone" value={tone} onChange={(e) => setTone(e.target.value)}
+            className="input-dark w-full text-sm bg-slate-50 dark:bg-slate-800 border-none rounded-xl px-4 py-2 text-slate-700 dark:text-slate-200">
+            {AD_COPY_TONES.map((t) => (
               <option key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</option>
             ))}
           </select>
         </div>
-        <div className="space-y-1">
-          <label htmlFor="adcopy-language" className="block text-xs text-slate-400 font-medium">Language</label>
-          <select id="adcopy-language" name="adcopy-language" value={language} onChange={e => setLanguage(e.target.value)}
-            className="bg-surface-muted border border-surface-border rounded-lg px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-brand-400">
-            {LANGUAGES.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+        <div className="space-y-1.5 min-w-[140px]">
+          <label htmlFor="adcopy-language" className="block text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Language</label>
+          <select id="adcopy-language" name="adcopy-language" value={language} onChange={(e) => setLanguage(e.target.value)}
+            className="input-dark w-full text-sm bg-slate-50 dark:bg-slate-800 border-none rounded-xl px-4 py-2 text-slate-700 dark:text-slate-200">
+            {LANGUAGES.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
           </select>
         </div>
         <button
           onClick={() => onGenerate(AD_COPY_PLATFORMS, tone, language)}
           disabled={loading}
-          className="btn-brand px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 ml-auto">
+          className="btn-brand px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 flex-1 md:flex-none md:ml-auto">
           {loading ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
           Generate All Platforms
         </button>
       </div>
 
       {uniqueCopies.length === 0 ? (
-        <div className="glass rounded-xl p-10 border border-surface-border text-center text-slate-500 text-sm">
+        <div className="bg-white dark:bg-slate-900 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl p-12 text-center text-slate-500 dark:text-slate-400 text-sm flex flex-col items-center justify-center gap-2">
+          <Send size={24} className="text-slate-300 dark:text-slate-700" />
           No ad copies yet. Click Generate to create platform-specific copy.
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-          <div className="space-y-1">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
+          <div className="space-y-1.5">
             {uniqueCopies.map((c, i) => (
               <button key={c.id} onClick={() => setSelected(i)}
-                className={`w-full text-left px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                  i === selected ? "bg-brand-500/20 text-brand-300" : "text-slate-400 hover:text-slate-200 hover:bg-surface-muted"
+                className={`w-full text-left px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-150 border ${
+                  i === selected
+                    ? "bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-800/50 shadow-sm"
+                    : "bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/50"
                 }`}>
-                <span className={PLATFORM_COLORS[c.platform] || "text-slate-400"}>
+                <span className={i === selected ? PLATFORM_COLORS[c.platform] || "text-slate-800 dark:text-slate-200" : ""}>
                   {c.platform.charAt(0).toUpperCase() + c.platform.slice(1)}
                 </span>
               </button>
             ))}
           </div>
+          
           {copy && (
-            <div className="lg:col-span-3 glass-dynamic rounded-xl p-5 space-y-4 animate-scale-up">
-              <div className="flex items-center justify-between gap-3">
-                <span className={`text-xs font-medium ${PLATFORM_COLORS[copy.platform] || "text-slate-400"}`}>
-                  {copy.platform.charAt(0).toUpperCase() + copy.platform.slice(1)}
-                  {copy.tone && <span className="text-slate-600"> · {copy.tone}</span>}
+            <div className="lg:col-span-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-5 animate-scale-up">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+                <div className="flex items-center gap-2">
+                  <span className={`text-sm font-bold ${PLATFORM_COLORS[copy.platform] || "text-slate-700 dark:text-slate-200"}`}>
+                    {copy.platform.charAt(0).toUpperCase() + copy.platform.slice(1)}
+                  </span>
+                  {copy.tone && <span className="text-xs text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded capitalize">{copy.tone}</span>}
                   {copy.fallback && (
-                    <span className="badge-mock px-1.5 py-0.5 rounded ml-2" title="Generation failed — this is placeholder English copy, not a real result in the requested language">
-                      fallback
+                    <span className="text-[10px] bg-rose-50 dark:bg-rose-900/30 text-rose-700 dark:text-rose-400 border border-rose-200 dark:border-rose-800/50 px-1.5 py-0.5 rounded font-semibold" title="Generation failed — this is placeholder fallback copy">
+                      FALLBACK
                     </span>
                   )}
-                </span>
+                </div>
                 <button
                   onClick={() => regenerateOne(copy.platform)}
                   disabled={loading || !!regenerating}
-                  className="text-xs px-2.5 py-1 rounded-lg border border-surface-border text-slate-400 hover:text-slate-200 hover:bg-surface-muted flex items-center gap-1.5 disabled:opacity-50">
-                  {regenerating === copy.platform
-                    ? <Loader2 size={12} className="animate-spin" />
-                    : <RefreshCw size={12} />}
+                  className="text-xs px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 hover:text-slate-800 font-medium flex items-center gap-1.5 disabled:opacity-50 transition-colors">
+                  {regenerating === copy.platform ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                   Regenerate
                 </button>
               </div>
 
               {copy.headline && (
-                <div className="flex items-start justify-between gap-3">
-                  <p className="text-base font-semibold text-white">{copy.headline}</p>
-                  <button onClick={() => copyToClipboard("Headline", copy.headline!)}
-                    className="text-xs text-slate-500 hover:text-brand-300 flex-shrink-0">Copy</button>
+                <div className="flex items-start justify-between gap-4">
+                  <p className="text-lg font-bold text-slate-900 leading-snug">{copy.headline}</p>
+                  <button onClick={() => copyToClipboard("Headline", copy.headline!)} className="text-xs text-blue-600 font-medium hover:underline flex-shrink-0 pt-1">Copy</button>
                 </div>
               )}
 
-              <div className="space-y-1">
-                <div className="flex items-start justify-between gap-3">
-                  <p className="text-sm text-slate-300 whitespace-pre-wrap">{copy.body}</p>
-                  <button onClick={() => copyToClipboard("Body", copy.body)}
-                    className="text-xs text-slate-500 hover:text-brand-300 flex-shrink-0">Copy</button>
+              <div className="space-y-1.5">
+                <div className="flex items-start justify-between gap-4">
+                  <p className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">{copy.body}</p>
+                  <button onClick={() => copyToClipboard("Body", copy.body)} className="text-xs text-blue-600 font-medium hover:underline flex-shrink-0 pt-0.5">Copy</button>
                 </div>
                 {limit !== undefined && (
-                  <p className={`text-[10px] font-mono ${overLimit ? "text-red-400" : "text-slate-600"}`}>
+                  <p className={`text-[10px] font-mono mt-2 ${overLimit ? "text-rose-600 font-semibold bg-rose-50 inline-block px-2 py-0.5 rounded" : "text-slate-400"}`}>
                     {bodyLength} / {limit} characters{overLimit ? " — over the platform limit" : ""}
                   </p>
                 )}
               </div>
 
               {copy.cta_variants?.length > 0 && (
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 pt-2">
                   {copy.cta_variants.map((cta, i) => (
                     <button key={i} onClick={() => copyToClipboard("CTA", cta)}
-                      className="px-3 py-1 rounded-full text-xs bg-brand-500/20 text-brand-300 border border-brand-500/30 hover:bg-brand-500/30">
+                      className="px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200 transition-colors">
                       {cta}
                     </button>
                   ))}
@@ -168,10 +167,9 @@ export function AdCopyTab({ copies, campaignId, onGenerate, loading }: {
               )}
 
               {copy.hashtags?.length > 0 && (
-                <div className="flex items-start justify-between gap-3">
-                  <p className="text-xs text-slate-500">{copy.hashtags.map(h => `#${h}`).join(" ")}</p>
-                  <button onClick={() => copyToClipboard("Hashtags", copy.hashtags!.map(h => `#${h}`).join(" "))}
-                    className="text-xs text-slate-500 hover:text-brand-300 flex-shrink-0">Copy</button>
+                <div className="flex items-start justify-between gap-4 pt-2 border-t border-slate-100">
+                  <p className="text-sm font-medium text-blue-600 leading-relaxed">{copy.hashtags.map((h) => `#${h}`).join(" ")}</p>
+                  <button onClick={() => copyToClipboard("Hashtags", copy.hashtags!.map((h) => `#${h}`).join(" "))} className="text-xs text-blue-600 font-medium hover:underline flex-shrink-0 pt-0.5">Copy</button>
                 </div>
               )}
             </div>
@@ -192,23 +190,22 @@ export function PostingTab({ posts, campaignId, copies, posters, onPost, loading
     posted: "✅", posting: "⏳", scheduled: "📅", failed: "❌", pending: "🔄",
   };
 
-  const togglePlatform = (p: string) =>
-    setSelected(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p]);
+  const togglePlatform = (p: string) => setSelected((prev) => prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]);
 
   return (
     <div className="space-y-6">
-      <div className="glass-dynamic rounded-xl p-5 space-y-4 animate-fade-in-up">
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 space-y-5 animate-fade-in-up">
         <div>
-          <p className="text-xs text-slate-400 uppercase tracking-wide mb-2">Platforms</p>
-          <div className="flex flex-wrap gap-2">
-            {POSTING_PLATFORMS.map(p => (
+          <p className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-3">Publish to Platforms</p>
+          <div className="flex flex-wrap gap-2.5">
+            {POSTING_PLATFORMS.map((p) => (
               <label key={p}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm cursor-pointer border ${
+                className={`flex items-center gap-2.5 px-4 py-2 rounded-xl text-sm font-semibold cursor-pointer border transition-colors ${
                   selected.includes(p)
-                    ? "border-brand-400 bg-brand-500/10 text-brand-200"
-                    : "border-surface-border text-slate-400"
+                    ? "border-blue-500 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 shadow-sm"
+                    : "border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
                 }`}>
-                <input type="checkbox" className="accent-brand-500"
+                <input type="checkbox" className="accent-blue-600 w-4 h-4 rounded border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700"
                   checked={selected.includes(p)}
                   onChange={() => togglePlatform(p)} />
                 {p.charAt(0).toUpperCase() + p.slice(1)}
@@ -216,40 +213,42 @@ export function PostingTab({ posts, campaignId, copies, posters, onPost, loading
             ))}
           </div>
         </div>
-        <div className="flex justify-end">
+        <div className="flex justify-end pt-2 border-t border-slate-100 dark:border-slate-800">
           <button onClick={() => onPost(selected, copies[0]?.id, posters[0]?.id)}
             disabled={loading || selected.length === 0}
-            className="btn-brand px-5 py-2.5 rounded-xl text-sm font-semibold flex items-center gap-2 flex-shrink-0 disabled:opacity-50">
-            {loading ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+            className="btn-brand px-6 py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 w-full md:w-auto disabled:opacity-50">
+            {loading ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
             Post Now{selected.length > 1 ? ` (${selected.length} platforms)` : ""}
           </button>
         </div>
       </div>
-      <div className="space-y-3">
-        <h3 className="text-sm font-semibold text-slate-400">Post History</h3>
+
+      <div className="space-y-3 pt-2">
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200">Publish History</h3>
         {posts.length === 0 ? (
-          <div className="glass rounded-xl p-8 border border-surface-border text-center text-slate-500 text-sm">
-            No posts yet
+          <div className="bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 rounded-xl p-8 text-center text-slate-500 dark:text-slate-400 text-sm">
+            No posts published yet
           </div>
         ) : posts.map((p, i) => (
-          <div key={p.id} className="glass-dynamic rounded-xl p-4 flex items-center justify-between animate-fade-in-up" style={{ animationDelay: `${i * 100}ms` }}>
-            <div className="flex items-center gap-3">
-              <span className="text-lg">{icons[p.status] || "🔄"}</span>
+          <div key={p.id} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 flex items-center justify-between shadow-sm animate-fade-in-up" style={{ animationDelay: `${i * 80}ms` }}>
+            <div className="flex items-center gap-4">
+              <span className="text-2xl leading-none">{icons[p.status] || "🔄"}</span>
               <div>
-                <p className="text-sm font-medium text-white">{p.platform}</p>
-                <p className="text-xs text-slate-500">
-                  {p.is_mock && <span className="badge-mock px-1.5 py-0.5 rounded mr-1">mock</span>}
-                  {p.platform_post_id || "No ID yet"}
+                <p className="text-sm font-bold text-slate-800 dark:text-slate-200 capitalize">{p.platform}</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  {p.is_mock && <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border border-blue-200 dark:border-blue-800/50 font-semibold mr-2">Mock</span>}
+                  {p.platform_post_id || "No ID assigned"}
                 </p>
               </div>
             </div>
             <div className="text-right">
-              <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                p.status === "posted" ? "badge-posted" : p.status === "failed" ? "badge-failed" : "badge-pending"
+              <span className={`text-xs px-2.5 py-1 rounded-full font-semibold border ${
+                p.status === "posted" ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/50" : 
+                p.status === "failed" ? "bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-400 border-rose-200 dark:border-rose-800/50" : "bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-800/50"
               }`}>{p.status}</span>
               {p.platform_url && (
                 <a href={p.platform_url} target="_blank" rel="noreferrer"
-                  className="block text-xs text-brand-400 hover:underline mt-1">View Post ↗</a>
+                  className="block text-xs font-medium text-blue-600 hover:underline mt-1.5">View Post ↗</a>
               )}
             </div>
           </div>

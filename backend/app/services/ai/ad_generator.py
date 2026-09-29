@@ -108,23 +108,44 @@ class AdCopyGeneratorService:
         # silently came back as fluent-looking English with no visible error.
         logger.warning(
             "adcopy_fallback_used language=%s platforms=%s — returning "
-            "placeholder English copy, not a real generation result",
+            "placeholder copy, not a real generation result",
             language, platforms,
         )
-        return self._generate_fallback(product_name, offer, target_audience, platforms)
+        return self._generate_fallback(product_name, offer, target_audience, platforms, language)
 
-    def _generate_fallback(self, product_name, offer, target_audience, platforms) -> dict:
-        # `result` is keyed by platform name (the endpoint iterates
-        # `copies.items()` expecting exactly that shape), so the flag has to
-        # live inside each platform's own dict, not as a sibling top-level key
-        # — a top-level "fallback" key would make the endpoint's per-platform
-        # loop try to treat `True` as a platform's data and crash.
+    def _generate_fallback(self, product_name, offer, target_audience, platforms, language="en") -> dict:
+        # Fallback string translations for basic languages
+        _translations = {
+            "en": {
+                "headline": "🚀 {product_name} — {offer}",
+                "body": "Discover {product_name} — designed for {target_audience}.\n\n{offer} 🎉\n\nTap the link in bio!",
+                "cta": ["Shop Now →", "Get the Deal!", "Claim Your Offer"],
+                "tg_body": "📢 {product_name} — {offer}\n\nPerfect for {target_audience}."
+            },
+            "ta": {
+                "headline": "🚀 {product_name} — {offer}",
+                "body": "கண்டறியவும் {product_name} — {target_audience}-க்காக உருவாக்கப்பட்டது.\n\n{offer} 🎉",
+                "cta": ["இப்போது வாங்கு →", "சலுகையை பெறு!"],
+                "tg_body": "📢 {product_name} — {offer}\n\n{target_audience}-க்கு மிகவும் ஏற்றது."
+            },
+            "hi": {
+                "headline": "🚀 {product_name} — {offer}",
+                "body": "पेश है {product_name} — {target_audience} के लिए.\n\n{offer} 🎉",
+                "cta": ["अभी खरीदें →", "ऑफर लें!"],
+                "tg_body": "📢 {product_name} — {offer}\n\n{target_audience} के लिए बेहतरीन."
+            },
+            "te": {
+                "headline": "🚀 {product_name} — {offer}",
+                "body": "తెలుసుకోండి {product_name} — {target_audience} కోసం.\n\n{offer} 🎉",
+                "cta": ["ఇప్పుడు కొనండి →", "ఆఫర్ పొందండి!"],
+                "tg_body": "📢 {product_name} — {offer}\n\n{target_audience} కు సరైనది."
+            }
+        }
+        
+        t = _translations.get(language, _translations["en"])
+        
         result = {}
         for platform in platforms:
-            tmpl = _DEMO_COPY_TEMPLATE.get(platform)
-            if not tmpl:
-                continue
-
             def fmt(s):
                 return s.format(
                     product_name=product_name,
@@ -132,14 +153,16 @@ class AdCopyGeneratorService:
                     target_audience=target_audience,
                 ) if s else None
 
+            is_tg = platform in ("telegram", "whatsapp")
+            
             result[platform] = {
-                "headline":     fmt(tmpl["headline"]),
-                "body":         fmt(tmpl["body"]),
-                "cta_variants": tmpl["cta_variants"],
-                "hashtags":     tmpl["hashtags"],
+                "headline":     None if is_tg else fmt(t["headline"]),
+                "body":         fmt(t["tg_body"]) if is_tg else fmt(t["body"]),
+                "cta_variants": t["cta"],
+                "hashtags":     ["#deal", "#offer"],
                 "fallback":     True,
             }
-        logger.info("adcopy_fallback_generated platforms=%s", platforms)
+        logger.info("adcopy_fallback_generated platforms=%s language=%s", platforms, language)
         return result
 
 

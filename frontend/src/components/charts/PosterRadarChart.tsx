@@ -18,9 +18,9 @@ export function PosterRadarChart({ eval_ }: { eval_: PosterEvaluation }) {
   return (
     <ResponsiveContainer width="100%" height={220}>
       <RadarChart data={radarData}>
-        <PolarGrid stroke="#2d2b4e" />
-        <PolarAngleAxis dataKey="dim" tick={{ fill: "#94a3b8", fontSize: 11 }} />
-        <Radar dataKey="score" stroke="#6366f1" fill="#6366f1" fillOpacity={0.3} />
+        <PolarGrid stroke="#e2e8f0" />
+        <PolarAngleAxis dataKey="dim" tick={{ fill: "#64748b", fontSize: 11 }} />
+        <Radar dataKey="score" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.3} />
       </RadarChart>
     </ResponsiveContainer>
   );

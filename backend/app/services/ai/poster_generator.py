@@ -201,6 +201,7 @@ async def generate_brochure_spec(
 
     spec = normalize_brochure_spec(raw, ctx)
     spec["cta"] = _get_cta(language, campaign_goal, offer)
+    spec["language"] = language
     logger.info(
         "brochure_spec_result product=%s fallback=%s headline=%r offer=%r",
         product_name, spec["fallback"], spec.get("headline_en"), spec.get("offer_en"),
@@ -493,7 +494,8 @@ class PosterGeneratorService:
                 # If NO cutout is provided, we want SDXL to draw the product!
                 neg_base = (
                     "low quality, blurry, pixelated, oversaturated, grainy, "
-                    "watermark, text overlay, logos, letters, numbers, words, typography, "
+                    "watermark, text overlay, signage, menu, poster, label, packaging, screen, "
+                    "logos, letters, numbers, words, typography, symbols, "
                     "collage, deformed, distorted, bad anatomy, duplicate, ugly, bad composition"
                 )
                 
@@ -600,6 +602,16 @@ class PosterGeneratorService:
                         "language":     language,
                         "seed":         resolved_seed,
                         "layout":       layout,
+                        "brand_kit": {
+                            "language": language,
+                            "logo": bool(kit.logo_path),
+                            "partner_logo": bool(kit.partner_logo_path),
+                            "product_image": bool(kit.product_image_path),
+                            "product_cutout": bool(kit.product_cutout_path),
+                            "map_image": bool(kit.map_image_path),
+                            "contact_details": kit.has_contact_details(),
+                            "brand_color": kit.brand_color_hex,
+                        },
                         # Surfaces a synthetic/fallback brochure spec in the DB
                         # record instead of letting it masquerade as real copy —
                         # same convention as poster_evaluator's fallback flag.

@@ -223,11 +223,14 @@ class SocialPostingService:
                 platform=platform,
                 ad_copy_id=ad_copy_id,
                 poster_id=poster_id,
-                status="pending",
+                status="posting",
             ))
         for sp in posts:
             if sp.id is None:
                 db.add(sp)
+            else:
+                # If we reused an existing row that was failed/pending, mark it posting
+                sp.status = "posting"
         await db.commit()
         for sp in posts:
             await db.refresh(sp)
@@ -258,12 +261,6 @@ class SocialPostingService:
             try:
                 if sp.status == "posted":
                     logger.info("publish_skip_already_posted post_id=%s platform=%s", sp.id, sp.platform)
-                    continue
-                if sp.status == "posting" and not sp.platform_post_id:
-                    # A prior request may have reached the platform but lost
-                    # its response. Treat this as ambiguous, not retryable.
-                    await self._log(db, sp.id, "publish_ambiguous_skipped", {})
-                    await db.commit()
                     continue
                 await self.publish(db, sp, text, image_url)
                 await db.commit()
@@ -322,6 +319,15 @@ class SocialPostingService:
 
         adapter = _get_adapter(social_post.platform)
         metrics = await adapter.fetch_metrics(social_post.platform_post_id)
+        if metrics.unavailable:
+            logger.info(
+                "metrics_unavailable",
+                platform=social_post.platform,
+                post_id=social_post.platform_post_id,
+                reason=metrics.error,
+            )
+            await self._log(db, social_post.id, "metrics_unavailable", {"reason": metrics.error})
+            return None
         if not metrics.ok:
             logger.warning(
                 "metrics_fetch_failed",

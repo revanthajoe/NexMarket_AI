@@ -34,8 +34,14 @@ class LSTMForecastService:
 
         eligible_rows = [row for row in analytics_rows if row.get("source_type") == "ACTUAL"]
         if len(eligible_rows) < 14:
+            logger.warning(
+                "lstm_forecast_insufficient_data campaign=%s actual_rows=%d horizon=%d",
+                campaign_id,
+                len(eligible_rows),
+                horizon_days,
+            )
             raise ValueError(
-                "INSUFFICIENT_DATA: forecast requires at least 14 ACTUAL analytics observations"
+                f"INSUFFICIENT_DATA: forecast requires at least 14 ACTUAL analytics rows; got {len(eligible_rows)}"
             )
         _validate_history(eligible_rows)
         history = _rows_to_array(eligible_rows)

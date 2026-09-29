@@ -76,6 +76,7 @@ class PostMetrics:
         spend: float = 0.0,
         is_mock: bool = False,
         error: Optional[str] = None,
+        unavailable: bool = False,
     ):
         self.impressions = int(impressions)
         self.clicks = int(clicks)
@@ -86,6 +87,7 @@ class PostMetrics:
         self.spend = float(spend)
         self.is_mock = is_mock
         self.error = error
+        self.unavailable = unavailable
 
     @property
     def ok(self) -> bool:
@@ -146,10 +148,24 @@ def _resolve_local_media(image_url: Optional[str]):
 
         from app.core.config import settings
 
-        candidate = Path(settings.POSTER_UPLOAD_DIR) / image_url.split("/")[-1].split("?")[0]
-        return candidate if candidate.is_file() else None
+        filename = image_url.split("/")[-1].split("?")[0]
+        configured_dir = Path(settings.POSTER_UPLOAD_DIR)
+        candidates = [configured_dir / filename]
+        if not configured_dir.is_absolute():
+            backend_root = Path(__file__).resolve().parents[3]
+            candidates.append(backend_root / configured_dir / filename)
+        return next((candidate for candidate in candidates if candidate.is_file()), None)
     except Exception:
         return None
+
+
+def _is_local_media_url(image_url: Optional[str]) -> bool:
+    """Whether an image URL points at this app's local static media."""
+    if not image_url:
+        return False
+    from app.core.config import settings
+
+    return image_url.startswith(settings.STATIC_BASE_URL) or image_url.startswith("/static/")
 
 
 def _api_error(resp) -> str:
@@ -466,9 +482,9 @@ class TelegramAdapter(SocialPlatformAdapter):
     platform_name = "telegram"
 
     def __init__(self, bot_token: str, chat_id: str):
-        self.bot_token = bot_token
-        self.chat_id = chat_id
-        self._base = f"https://api.telegram.org/bot{bot_token}"
+        self.bot_token = bot_token.strip()
+        self.chat_id = chat_id.strip()
+        self._base = f"https://api.telegram.org/bot{self.bot_token}"
 
     @property
     def _safe_base(self) -> str:
@@ -477,6 +493,12 @@ class TelegramAdapter(SocialPlatformAdapter):
 
     async def post(self, payload: PostPayload) -> PostResult:
         import httpx
+
+        if not self.bot_token or not self.chat_id:
+            return PostResult(
+                success=False,
+                error="Telegram requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID",
+            )
 
         local_file = _resolve_local_media(payload.image_url) if payload.image_url else None
 
@@ -489,7 +511,7 @@ class TelegramAdapter(SocialPlatformAdapter):
                         data={"chat_id": self.chat_id, "caption": payload.text[:1024]},
                         files={"photo": (local_file.name, fh, "image/png")},
                     )
-            elif payload.image_url:
+            elif payload.image_url and not _is_local_media_url(payload.image_url):
                 r = await client.post(
                     f"{self._base}/sendPhoto",
                     data={
@@ -497,6 +519,11 @@ class TelegramAdapter(SocialPlatformAdapter):
                         "photo": payload.image_url,
                         "caption": payload.text[:1024],
                     },
+                )
+            elif payload.image_url:
+                return PostResult(
+                    success=False,
+                    error="Telegram could not find the local poster file to upload",
                 )
             else:
                 r = await client.post(
@@ -539,15 +566,24 @@ class TelegramAdapter(SocialPlatformAdapter):
         """
         return PostMetrics(
             error="Telegram Bot API exposes no per-message engagement metrics",
+            unavailable=True,
         )
 
     async def health_check(self) -> bool:
         import httpx
 
+        if not self.bot_token or not self.chat_id:
+            return False
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(f"{self._base}/getMe")
-                return r.status_code == 200 and r.json().get("ok", False)
+                bot = await client.get(f"{self._base}/getMe")
+                if bot.status_code != 200 or not bot.json().get("ok", False):
+                    return False
+                chat = await client.get(
+                    f"{self._base}/getChat",
+                    params={"chat_id": self.chat_id},
+                )
+                return chat.status_code == 200 and chat.json().get("ok", False)
         except Exception:
             return False
 

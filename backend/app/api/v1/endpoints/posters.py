@@ -27,7 +27,9 @@ router = APIRouter(prefix="/posters", tags=["Posters"])
 async def list_posters_by_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)):
     from sqlalchemy import select
     result = await db.execute(
-        select(Poster).where(Poster.campaign_id == campaign_id).order_by(Poster.variation_index)
+        select(Poster)
+        .where(Poster.campaign_id == campaign_id, Poster.provider != "mock")
+        .order_by(Poster.variation_index)
     )
     return result.scalars().all()
 
@@ -78,6 +80,8 @@ async def generate_posters(
                 sdxl_model_version_id=sdxl_model_version_id,
                 sdxl_lora_path=sdxl_lora_path,
             )
+            if gen.get("provider") == "mock" and settings.IMAGE_PROVIDER != "mock":
+                raise RuntimeError("Image generation returned a mock poster while IMAGE_PROVIDER is not mock")
 
             poster = Poster(
                 campaign_id=campaign_fields["campaign_id"],

@@ -1,7 +1,20 @@
 import type { Metadata } from "next";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Sidebar } from "@/components/ui/Sidebar";
 import { ToasterProvider } from "@/components/ui/ToasterProvider";
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-sans",
+  display: "swap",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "NexMarket AI — AI Marketing Automation Platform",
@@ -13,31 +26,26 @@ export const metadata: Metadata = {
   },
 };
 
+import { ThemeProvider } from "@/components/ui/ThemeProvider";
+
 export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap"
-        />
-      </head>
-      <body className="bg-surface text-slate-700 flex h-screen overflow-hidden ambient-background">
-        <Sidebar />
-        <main className="flex-1 overflow-y-auto bg-surface/80">
-          <div className="max-w-7xl mx-auto p-6 animate-fade-in">
-            {children}
-          </div>
-        </main>
-        <ToasterProvider />
+    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable}`} suppressHydrationWarning>
+      <body className="bg-surface text-slate-800 flex h-screen overflow-hidden antialiased font-sans dark:bg-slate-900 dark:text-slate-100">
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
+          <Sidebar />
+          <main className="flex-1 overflow-y-auto bg-surface dark:bg-slate-900">
+            <div className="max-w-7xl mx-auto px-6 py-8 animate-fade-in">
+              {children}
+            </div>
+          </main>
+          <ToasterProvider />
+        </ThemeProvider>
       </body>
     </html>
   );
 }
-

@@ -81,12 +81,15 @@ async def n8n_trigger_campaign(
 
                 # ── Poster ────────────────────────────────────────────────
                 if "poster" in steps:
-                    # Idempotency: skip if poster already exists
+                    # Idempotency: skip if poster already exists, unless upgrading from mock
                     existing_posters = (await bg_db.execute(
-                        select(Poster).where(Poster.campaign_id == campaign_id).limit(1)
+                        select(Poster).where(Poster.campaign_id == campaign_id).order_by(Poster.created_at.desc()).limit(1)
                     )).scalars().all()
 
-                    if existing_posters:
+                    from app.core.config import settings
+                    is_mock_upgrade = existing_posters and existing_posters[0].provider == "mock" and settings.IMAGE_PROVIDER != "mock"
+
+                    if existing_posters and not is_mock_upgrade:
                         log.info("pipeline_skip_poster campaign_id=%s already has posters", campaign_id)
                         results["poster_id"] = existing_posters[0].id
                     else:

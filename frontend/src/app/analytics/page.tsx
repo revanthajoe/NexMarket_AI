@@ -14,7 +14,7 @@ const ForecastLineChart = dynamic(
 
 const EngagementChart = dynamic(
   () => import("@/components/charts/EngagementChart").then((m) => m.EngagementChart),
-  { ssr: false, loading: () => <div className="h-[220px] shimmer rounded-xl" /> }
+  { ssr: false, loading: () => <div className="h-[240px] shimmer rounded-xl" /> }
 );
 
 const RANGES = [7, 14, 30, 90];
@@ -43,7 +43,7 @@ export default function AnalyticsPage() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    api.campaigns.list().then(res => {
+    api.campaigns.list().then((res) => {
       setCampaigns(res);
       if (res.length > 0) setForecastCampaign(res[0].id);
     }).catch(() => {});
@@ -62,7 +62,7 @@ export default function AnalyticsPage() {
     if (!forecastCampaign) return;
     setLoading(true);
     try {
-      const f = await api.forecast.create(forecastCampaign, 14); // 14-day horizon
+      const f = await api.forecast.create(forecastCampaign, 14);
       setForecast(f);
       toast.success("Forecast generated!");
     } catch (err: unknown) {
@@ -73,19 +73,17 @@ export default function AnalyticsPage() {
   };
 
   const syncEngagement = async () => {
-    // Syncing is per-campaign on the backend; with "All campaigns" selected we
-    // fan out rather than silently syncing nothing.
-    const targets = selectedCampaign ? [selectedCampaign] : campaigns.map(c => c.id);
+    const targets = selectedCampaign ? [selectedCampaign] : campaigns.map((c) => c.id);
     if (targets.length === 0) return;
     setSyncing(true);
     try {
-      const results = await Promise.all(targets.map(id => api.posting.syncMetrics(id)));
+      const results = await Promise.all(targets.map((id) => api.posting.syncMetrics(id)));
       const synced = results.reduce((n, r) => n + r.synced, 0);
       const checked = results.reduce((n, r) => n + r.posts_checked, 0);
       if (checked === 0) toast("No published posts to pull metrics from yet");
       else toast.success(`Synced ${synced}/${checked} posts`);
       invalidateCache();
-      setRefreshKey(k => k + 1);
+      setRefreshKey((k) => k + 1);
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Engagement sync failed");
     } finally {
@@ -94,53 +92,56 @@ export default function AnalyticsPage() {
   };
 
   const scopeName = selectedCampaign
-    ? campaigns.find(c => c.id === selectedCampaign)?.name ?? "campaign"
+    ? campaigns.find((c) => c.id === selectedCampaign)?.name ?? "campaign"
     : "all campaigns";
 
   return (
     <div className="space-y-8">
+      {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
-            <BarChart3 size={20} className="text-brand-400" />
+        <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center">
+            <BarChart3 size={18} className="text-blue-600" />
           </div>
           Central Analytics Hub
         </h1>
-        <p className="text-slate-400 mt-2 text-sm">
+        <p className="text-slate-500 mt-1.5 text-sm">
           Platform-wide performance and LSTM engagement forecasting
         </p>
       </div>
 
+      {/* Stats */}
       <DashboardStats />
 
-      {/* ── Tracking controls ─────────────────────────────────────────── */}
-      <div className="glass rounded-2xl p-5 border border-surface-border flex flex-wrap items-end gap-4">
+      {/* Tracking controls */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-wrap items-end gap-4">
         <div className="flex-1 min-w-[220px]">
-          <label htmlFor="analytics-scope" className="text-xs font-medium text-slate-400 uppercase tracking-wide">
+          <label htmlFor="analytics-scope" className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
             Scope
           </label>
           <select
             id="analytics-scope"
+            name="analytics-scope"
             className="input-dark mt-2"
             value={selectedCampaign}
-            onChange={e => setSelectedCampaign(e.target.value)}
+            onChange={(e) => setSelectedCampaign(e.target.value)}
           >
             <option value={ALL_CAMPAIGNS}>All campaigns</option>
-            {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
 
         <div>
-          <span className="text-xs font-medium text-slate-400 uppercase tracking-wide">Range</span>
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Date range</span>
           <div className="flex gap-1 mt-2">
-            {RANGES.map(r => (
+            {RANGES.map((r) => (
               <button
                 key={r}
                 onClick={() => setDays(r)}
-                className={`px-3 py-2 rounded-lg text-xs transition-colors ${
+                className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
                   days === r
-                    ? "bg-brand-500/20 text-brand-300 border border-brand-500/40"
-                    : "bg-surface-muted text-slate-400 border border-surface-border hover:text-slate-200"
+                    ? "bg-blue-600 text-white shadow-brand"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                 }`}
               >
                 {r}d
@@ -152,90 +153,109 @@ export default function AnalyticsPage() {
         <button
           onClick={syncEngagement}
           disabled={syncing || campaigns.length === 0}
-          className="btn-brand px-5 py-2.5 rounded-xl font-medium flex items-center gap-2 disabled:opacity-50"
+          className="btn-brand px-5 py-2.5 rounded-xl font-semibold flex items-center gap-2 disabled:opacity-50"
         >
-          {syncing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+          {syncing ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
           Sync Engagement
         </button>
       </div>
 
-      {/* ── Provenance ────────────────────────────────────────────────── */}
+      {/* Provenance status row */}
       {tracking && (
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-slate-500 px-1">
-          <span>
-            {tracking.event_count} event{tracking.event_count === 1 ? "" : "s"} · {scopeName}
+          <span className="text-slate-600">
+            <strong className="text-slate-800">{tracking.event_count}</strong> event{tracking.event_count === 1 ? "" : "s"} · {scopeName}
           </span>
           <span>{tracking.published_posts} published post{tracking.published_posts === 1 ? "" : "s"}</span>
           <span>Last synced {formatWhen(tracking.last_synced_at)}</span>
+          {tracking.has_real_data ? (
+            <span className="text-emerald-600 font-medium bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+              ● ACTUAL data available
+            </span>
+          ) : (
+            <span className="text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+              No ACTUAL data yet
+            </span>
+          )}
           {tracking.mock_event_count > 0 && (
-            <span className="flex items-center gap-1.5 text-amber-400">
-              <AlertTriangle size={12} />
-              {tracking.mock_event_count} of these came from the mock adapter — not real platform data
+            <span className="flex items-center gap-1.5 text-amber-600 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+              <AlertTriangle size={11} />
+              {tracking.mock_event_count} mock event{tracking.mock_event_count === 1 ? "" : "s"} — not real platform data
             </span>
           )}
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        <div className="glass rounded-2xl p-6 border border-surface-border flex flex-col h-full">
+      {/* Charts row */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Engagement over time */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 flex flex-col">
           <div className="mb-4">
-            <h2 className="text-lg font-semibold text-slate-800">Engagement Over Time</h2>
-            <p className="text-xs text-slate-500 mt-1">Daily likes and reach · last {days} days · {scopeName}</p>
+            <h2 className="text-base font-semibold text-slate-800">Engagement Over Time</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Daily likes and reach · last {days} days · {scopeName}</p>
           </div>
-          <div className="flex-1 mt-auto">
+          <div className="flex-1">
             <EngagementChart days={days} campaignId={selectedCampaign || undefined} refreshKey={refreshKey} />
           </div>
         </div>
 
-        <div className="glass rounded-2xl p-6 border border-surface-border">
+        {/* LSTM Forecast */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-6">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-lg font-semibold text-slate-800">LSTM Campaign Forecast</h2>
-              <p className="text-xs text-slate-500 mt-1">Predictive engagement modelling</p>
+              <h2 className="text-base font-semibold text-slate-800">LSTM Campaign Forecast</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Predictive engagement modelling</p>
             </div>
-            <Activity size={24} className="text-brand-400 opacity-50" />
+            <Activity size={20} className="text-blue-400 opacity-60" />
           </div>
 
-          <div className="space-y-4 mb-6">
-            <div className="flex gap-4">
-              <select
-                className="input-dark flex-1"
-                value={forecastCampaign}
-                onChange={e => setForecastCampaign(e.target.value)}
-              >
-                {campaigns.length === 0 ? <option value="">No campaigns available</option> : null}
-                {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-              <button
-                onClick={runForecast}
-                disabled={loading || !forecastCampaign}
-                className="btn-brand px-5 py-2.5 rounded-xl font-medium flex items-center gap-2"
-              >
-                {loading ? <Loader2 size={16} className="animate-spin" /> : <TrendingUp size={16} />}
-                Run Forecast
-              </button>
-            </div>
+          <div className="flex gap-3 mb-5">
+            <select
+              id="forecast-campaign"
+              name="forecast-campaign"
+              className="input-dark flex-1 text-sm"
+              value={forecastCampaign}
+              onChange={(e) => setForecastCampaign(e.target.value)}
+            >
+              {campaigns.length === 0 ? <option value="">No campaigns available</option> : null}
+              {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+            <button
+              onClick={runForecast}
+              disabled={loading || !forecastCampaign}
+              className="btn-brand px-4 py-2 rounded-xl font-semibold flex items-center gap-2 whitespace-nowrap"
+            >
+              {loading ? <Loader2 size={14} className="animate-spin" /> : <TrendingUp size={14} />}
+              Run Forecast
+            </button>
           </div>
 
           {forecast ? (
-            <div className="space-y-4">
+            <div className="space-y-3">
               <ForecastLineChart forecast={forecast} />
-              <div className="flex justify-between items-center text-xs text-slate-500 pt-2 border-t border-surface-border">
-                <span>Model: {forecast.model_version} · {forecast.source_type || "UNKNOWN"} · history: {forecast.history_source || "UNKNOWN"}</span>
-                <span>Horizon: {forecast.forecast_horizon_days} Days</span>
+              <div className="flex justify-between items-center text-xs text-slate-400 pt-2 border-t border-slate-100">
+                <span className="font-mono">
+                  {forecast.model_version} · {forecast.source_type || "UNKNOWN"} · history: {forecast.history_source || "UNKNOWN"}
+                </span>
+                <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full font-medium">
+                  {forecast.forecast_horizon_days}d horizon
+                </span>
               </div>
             </div>
           ) : (
-            <div className="h-[280px] flex items-center justify-center text-slate-500 text-sm border border-dashed border-surface-border rounded-xl bg-surface-muted/10">
-              Select a campaign and run forecast to view predictions
+            <div className="h-[240px] flex flex-col items-center justify-center text-slate-400 text-sm
+                            border-2 border-dashed border-slate-200 rounded-xl">
+              <TrendingUp size={24} className="text-slate-300 mb-2" />
+              <p>Select a campaign and run forecast</p>
+              <p className="text-xs text-slate-300 mt-1">Requires ≥14 ACTUAL observations</p>
             </div>
           )}
         </div>
       </div>
 
-      {/* ── Platform breakdown ────────────────────────────────────────── */}
-      <div className="glass rounded-2xl p-6 border border-surface-border">
-        <h2 className="text-lg font-semibold text-slate-800 mb-1">Performance by Platform</h2>
+      {/* Platform breakdown table */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-6">
+        <h2 className="text-base font-semibold text-slate-800 mb-1">Performance by Platform</h2>
         <p className="text-xs text-slate-500 mb-5">
           Totals over the last {days} days · CTR computed from summed clicks and impressions
         </p>
@@ -243,39 +263,42 @@ export default function AnalyticsPage() {
         {!platforms ? (
           <div className="h-[140px] shimmer rounded-xl" />
         ) : platforms.length === 0 ? (
-          <div className="p-10 border border-dashed border-surface-border rounded-xl text-center text-sm text-slate-500">
-            No engagement recorded yet. Publish a post, then hit Sync Engagement to pull metrics back
-            from the platform.
+          <div className="py-12 border-2 border-dashed border-slate-200 rounded-xl text-center text-sm text-slate-400">
+            <BarChart3 size={24} className="text-slate-300 mx-auto mb-3" />
+            <p>No engagement recorded yet.</p>
+            <p className="text-xs mt-1 text-slate-300">Publish a post, then hit &quot;Sync Engagement&quot; to pull metrics.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-xs uppercase tracking-wide text-slate-500 border-b border-surface-border">
-                  <th className="text-left font-medium py-2 pr-4">Platform</th>
-                  <th className="text-right font-medium py-2 px-3">Impressions</th>
-                  <th className="text-right font-medium py-2 px-3">Reach</th>
-                  <th className="text-right font-medium py-2 px-3">Clicks</th>
-                  <th className="text-right font-medium py-2 px-3">CTR</th>
-                  <th className="text-right font-medium py-2 px-3">Engagement</th>
-                  <th className="text-right font-medium py-2 pl-3">Synced</th>
+                <tr className="text-xs uppercase tracking-wide text-slate-400 border-b border-slate-200">
+                  <th className="text-left font-semibold py-2.5 pr-4">Platform</th>
+                  <th className="text-right font-semibold py-2.5 px-3">Impressions</th>
+                  <th className="text-right font-semibold py-2.5 px-3">Reach</th>
+                  <th className="text-right font-semibold py-2.5 px-3">Clicks</th>
+                  <th className="text-right font-semibold py-2.5 px-3">CTR</th>
+                  <th className="text-right font-semibold py-2.5 px-3">Engagement</th>
+                  <th className="text-right font-semibold py-2.5 pl-3">Synced</th>
                 </tr>
               </thead>
               <tbody>
-                {platforms.map(p => (
-                  <tr key={p.platform} className="border-b border-surface-border/50 last:border-0">
-                    <td className="py-3 pr-4 text-slate-200 capitalize flex items-center gap-2">
+                {platforms.map((p) => (
+                  <tr key={p.platform} className="border-b border-slate-100 last:border-0 hover:bg-slate-50 transition-colors">
+                    <td className="py-3 pr-4 text-slate-700 capitalize font-medium flex items-center gap-2">
                       {p.platform}
                       {p.is_mock && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] badge-mock">Mock</span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-50 text-blue-600 border border-blue-200 font-semibold">
+                          Mock
+                        </span>
                       )}
                     </td>
-                    <td className="py-3 px-3 text-right text-slate-300">{p.impressions.toLocaleString()}</td>
-                    <td className="py-3 px-3 text-right text-slate-300">{p.reach.toLocaleString()}</td>
-                    <td className="py-3 px-3 text-right text-slate-300">{p.clicks.toLocaleString()}</td>
-                    <td className="py-3 px-3 text-right text-brand-300">{(p.ctr * 100).toFixed(2)}%</td>
-                    <td className="py-3 px-3 text-right text-slate-300">{(p.engagement_rate * 100).toFixed(2)}%</td>
-                    <td className="py-3 pl-3 text-right text-slate-500 text-xs">{formatWhen(p.last_synced_at)}</td>
+                    <td className="py-3 px-3 text-right text-slate-600">{p.impressions.toLocaleString()}</td>
+                    <td className="py-3 px-3 text-right text-slate-600">{p.reach.toLocaleString()}</td>
+                    <td className="py-3 px-3 text-right text-slate-600">{p.clicks.toLocaleString()}</td>
+                    <td className="py-3 px-3 text-right text-blue-600 font-medium">{(p.ctr * 100).toFixed(2)}%</td>
+                    <td className="py-3 px-3 text-right text-slate-600">{(p.engagement_rate * 100).toFixed(2)}%</td>
+                    <td className="py-3 pl-3 text-right text-slate-400 text-xs">{formatWhen(p.last_synced_at)}</td>
                   </tr>
                 ))}
               </tbody>

@@ -18,13 +18,13 @@ export function ForecastLineChart({ forecast }: { forecast: Forecast }) {
   return (
     <ResponsiveContainer width="100%" height={280}>
       <LineChart data={chartData}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#2d2b4e" />
-        <XAxis dataKey="day" tick={{ fill: "#64748b", fontSize: 11 }} />
-        <YAxis tick={{ fill: "#64748b", fontSize: 11 }} />
-        <Tooltip contentStyle={{ background: "#17162a", border: "1px solid #2d2b4e", borderRadius: 8 }} />
+        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+        <XAxis dataKey="day" tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} />
+        <YAxis tick={{ fill: "#64748b", fontSize: 11 }} axisLine={false} tickLine={false} />
+        <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: 8, color: "#1e293b" }} />
         <Legend />
-        <Line type="monotone" dataKey="likes"    stroke="#6366f1" strokeWidth={2} dot={false} />
-        <Line type="monotone" dataKey="shares"   stroke="#06b6d4" strokeWidth={2} dot={false} />
+        <Line type="monotone" dataKey="likes"    stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} activeDot={{ r: 5 }} />
+        <Line type="monotone" dataKey="shares"   stroke="#0ea5e9" strokeWidth={2} dot={false} />
         <Line type="monotone" dataKey="comments" stroke="#8b5cf6" strokeWidth={2} dot={false} />
         <Line type="monotone" dataKey="reach"    stroke="#f59e0b" strokeWidth={2} dot={false} />
       </LineChart>

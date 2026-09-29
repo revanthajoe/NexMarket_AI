@@ -277,6 +277,10 @@ class BrochureComposer:
                 canvas.alpha_composite(logo, (lx, ly))
             except Exception as exc:
                 logger.warning("brochure_composer header logo failed: %s", exc)
+        elif has_partner:
+            # A partner/product logo is still valuable when the campaign has
+            # no separate retailer logo; do not silently discard it.
+            _paste_logo(kit.partner_logo_path, right_aligned=False)
         elif brand_name:
             # No logo uploaded at all — typeset the brand name instead of
             # leaving a blank white band. Most campaigns are in this state, so
@@ -301,23 +305,16 @@ class BrochureComposer:
         max_w = (x1 - x0) - 2 * margin_x
         zone_h = y1 - y0
 
-        bilingual = bool(
-            spec.get("headline_local") and spec["headline_local"] != spec["headline_en"]
-        )
+        preferred = spec.get("headline_en", "")
+        if spec.get("language") != "en":
+            preferred = spec.get("headline_local") or preferred
         y = y0 + int(zone_h * 0.06)
         # Each line is held to its share of the zone. The headline sits directly
         # above the hero, so an unbounded wrap here pushes into the badges.
         y += self._draw_fitted(
-            canvas, spec["headline_en"].upper(), cx, y, max_w,
-            int(zone_h * (0.48 if bilingual else 0.88)), int(zone_h * 0.30), _INK_LIGHT,
+            canvas, preferred.upper(), cx, y, max_w,
+            int(zone_h * 0.88), int(zone_h * 0.30), _INK_LIGHT,
         )
-
-        if bilingual:
-            y += int(zone_h * 0.03)
-            y += self._draw_fitted(
-                canvas, spec["headline_local"], cx, y, max_w,
-                max(1, y1 - y - int(zone_h * 0.04)), int(zone_h * 0.24), _INK_LIGHT,
-            )
 
         return y - y0
 
@@ -449,7 +446,9 @@ class BrochureComposer:
 
         draw.rectangle([x0, y0, x1, y1], fill=(0, 0, 0, 140))
 
-        title = spec.get("why_title_local") or spec.get("why_title_en", "")
+        title = spec.get("why_title_en", "")
+        if spec.get("language") != "en":
+            title = spec.get("why_title_local") or title
         y = y0 + int(zone_h * 0.08)
         # Title gets at most a third of the zone; the items need the rest.
         y += self._draw_fitted(canvas, title, cx, y, max_w, int(zone_h * 0.34),
@@ -462,7 +461,10 @@ class BrochureComposer:
         ] or [(t, t) for t in items_en]
 
         if pairs:
-            line = "   |   ".join(loc if loc and loc != en else en for en, loc in pairs)
+            line = "   |   ".join(
+                (loc if loc and loc != en else en) if spec.get("language") != "en" else en
+                for en, loc in pairs
+            )
             y += int(zone_h * 0.04)
             self._draw_fitted(canvas, line, cx, y, max_w, max(1, y1 - y - int(zone_h * 0.06)),
                               int(zone_h * 0.16), _INK_LIGHT, bold=False)
@@ -480,6 +482,7 @@ class BrochureComposer:
 
         offer_en    = spec.get("offer_en", "")
         offer_local = spec.get("offer_local", "")
+        preferred_offer = offer_local if spec.get("language") != "en" and offer_local else offer_en
         cta_font    = self._font_path(cta, bold=True)
         # render_cta_pill sizes text as a fraction of `height_ref` — that must
         # be the full canvas height, not this zone's height (~10% of canvas),
@@ -503,16 +506,16 @@ class BrochureComposer:
         # audience the actual deal. The headline zone already shows both.
         offer_max_w = max(int(zone_w * 0.25), pill_left - (x0 + margin_x) - int(zone_w * 0.03))
         offer_cx    = x0 + margin_x + offer_max_w // 2
-        bilingual   = bool(offer_local and offer_local != offer_en)
+        bilingual   = False
 
         # Split the zone's vertical budget between the two lines and hold each
         # to its share, so a long local offer cannot run off the canvas bottom.
         y = y0 + int(zone_h * (0.10 if bilingual else 0.22))
         en_budget = int(zone_h * (0.42 if bilingual else 0.60))
-        if offer_en:
+        if preferred_offer:
             y += self._draw_fitted(
-                canvas, offer_en.upper(), offer_cx, y, offer_max_w, en_budget,
-                int(zone_h * (0.26 if bilingual else 0.30)), (255, 255, 255, 255),
+                canvas, preferred_offer.upper(), offer_cx, y, offer_max_w, en_budget,
+                int(zone_h * 0.30), (255, 255, 255, 255),
             )
         if bilingual:
             y += int(zone_h * 0.03)
@@ -717,6 +720,34 @@ class BrochureComposer:
             cta_img = text_shaper.render_text(cta_text, cta_font, cta_text_size, (255, 255, 255, 255))
             overlay.alpha_composite(cta_img, (margin_x + (pill_w - cta_img.width)//2, cta_y + (pill_h - cta_img.height)//2))
             
+            # Contact Footer
+            if kit and kit.has_contact_details():
+                footer_h = int(H * 0.08)
+                footer_y = H - footer_h
+                draw.rectangle([0, footer_y, W, H], fill=(20, 22, 28, 240))
+                
+                contact_parts = []
+                if kit.phone: contact_parts.append(kit.phone)
+                if kit.website: contact_parts.append(kit.website)
+                if kit.address_en: contact_parts.append(kit.address_en)
+                
+                if contact_parts:
+                    contact_text = " • ".join(contact_parts)
+                    contact_font = self._font_path(contact_text, bold=False)
+                    contact_size = int(footer_h * 0.35)
+                    
+                    # Truncate if too long
+                    while contact_parts and text_shaper.measure_text(contact_text, contact_font, contact_size)[0] > (W - margin_x * 2):
+                        contact_parts.pop()
+                        contact_text = " • ".join(contact_parts)
+                        
+                    if contact_text:
+                        contact_img = text_shaper.render_text(contact_text, contact_font, contact_size, (200, 200, 200, 255))
+                        overlay.alpha_composite(
+                            contact_img, 
+                            ((W - contact_img.width) // 2, footer_y + (footer_h - contact_img.height) // 2)
+                        )
+
             img.alpha_composite(overlay, (0, 0))
             
             out = img.convert("RGB")

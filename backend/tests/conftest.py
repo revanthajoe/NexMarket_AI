@@ -47,6 +47,9 @@ def _remove_db_files() -> None:
 
 _remove_db_files()  # best-effort; see _sessions_finish note on why this can't be relied on
 os.environ["SQLITE_DB_PATH"] = str(_TEST_DB_PATH)
+# Tests must not publish to real integrations just because a developer's local
+# .env enables live mode. Individual live-adapter tests monkeypatch the adapter.
+os.environ["SOCIAL_MODE"] = "mock"
 
 # Import AFTER the env override above, and this is deliberately the first
 # import of anything under `app.*` in the whole test process — it's what

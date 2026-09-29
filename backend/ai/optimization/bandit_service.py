@@ -23,14 +23,12 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Default Beta priors: (alpha=2, beta=2) — slight positive bias
-_PRIORS = {"instagram": [2, 2], "facebook": [2, 2], "telegram": [2, 2], "whatsapp": [2, 2]}
+# Disabled facebook, instagram, whatsapp until they are integrated.
+_PRIORS = {"telegram": [2, 2]}
 
 # Platform prior CTR estimates for initial scoring
 _PLATFORM_BASE_CTR = {
-    "instagram": 0.035,
-    "facebook":  0.026,
     "telegram":  0.045,
-    "whatsapp":  0.06,
 }
 
 

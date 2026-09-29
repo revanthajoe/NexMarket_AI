@@ -899,7 +899,7 @@ async def test_live_telegram_publish_preserves_id_and_metrics_stay_unknown(clien
             )
 
         async def fetch_metrics(self, platform_post_id):
-            return PostMetrics(error="Telegram metrics unavailable")
+            return PostMetrics(error="Telegram metrics unavailable", unavailable=True)
 
         async def health_check(self):
             return True
@@ -924,7 +924,8 @@ async def test_live_telegram_publish_preserves_id_and_metrics_stay_unknown(clien
 
     metrics_response = await client.post(f"/api/v1/posting/metrics/sync/{cid}")
     assert metrics_response.status_code == 200
-    assert metrics_response.json()["failed"] == 1
+    assert metrics_response.json()["failed"] == 0
+    assert metrics_response.json()["synced"] == 0
 
     async with AsyncSessionLocal() as db:
         events = (await db.execute(

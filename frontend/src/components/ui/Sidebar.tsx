@@ -9,83 +9,155 @@ import {
   Send,
   BarChart3,
   Target,
-  TrendingUp,
   Users,
   Zap,
+  Plus,
+  Settings,
+  Type,
   ChevronRight,
+  Moon,
+  Sun,
 } from "lucide-react";
 import { clsx } from "clsx";
+import { useTheme } from "next-themes";
+import { useEffect, useState } from "react";
 
-const NAV = [
-  { href: "/",              label: "Dashboard",    icon: LayoutDashboard },
-  { href: "/campaign/new",  label: "New Campaign", icon: Megaphone },
-  { href: "/campaign",      label: "Campaigns",    icon: Zap },
-  { href: "/poster",        label: "Posters",      icon: ImageIcon },
-  { href: "/posting",       label: "Posting",      icon: Send },
-  { href: "/analytics",     label: "Analytics",    icon: BarChart3 },
-  { href: "/optimization",  label: "Optimize",     icon: Target },
-  { href: "/leads",         label: "Lead Scores",  icon: Users },
+const NAV_GROUPS = [
+  {
+    title: "MAIN",
+    items: [
+      { href: "/",             label: "Dashboard",       icon: LayoutDashboard },
+      { href: "/campaign",     label: "Campaigns",       icon: Megaphone },
+      { href: "/campaign/new", label: "Create Campaign", icon: Plus },
+    ]
+  },
+  {
+    title: "AI",
+    items: [
+      { href: "/poster",       label: "Poster Gallery",  icon: ImageIcon },
+      { href: "#",             label: "Ad Copy",         icon: Type },
+      { href: "/leads",        label: "Leads & Sentiment", icon: Users },
+    ]
+  },
+  {
+    title: "ANALYTICS",
+    items: [
+      { href: "/analytics",    label: "Analytics",       icon: BarChart3 },
+      { href: "/optimization", label: "Optimization",    icon: Target },
+    ]
+  },
+  {
+    title: "OPERATIONS",
+    items: [
+      { href: "/posting",      label: "Social Media",    icon: Send },
+    ]
+  },
+  {
+    title: "SETTINGS",
+    items: [
+      { href: "/settings",     label: "Settings",        icon: Settings },
+    ]
+  }
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   return (
-    <aside className="w-64 flex-shrink-0 flex flex-col border-r border-surface-border bg-white/80 backdrop-blur-xl">
-      {/* Logo */}
-      <div className="p-6 border-b border-surface-border">
+    <aside className="w-60 flex-shrink-0 flex flex-col bg-slate-900 border-r border-slate-800">
+      {/* Logo & Theme Toggle */}
+      <div className="px-5 py-5 border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-brand-gradient flex items-center justify-center shadow-brand">
-            <Zap size={18} className="text-white" />
+          <div className="w-8 h-8 rounded-lg bg-brand-gradient flex items-center justify-center shadow-brand">
+            <Zap size={15} className="text-white" />
           </div>
           <div>
-            <p className="font-bold text-slate-800 text-sm leading-none">NexMarket</p>
-            <p className="text-xs text-brand-400 mt-0.5">AI Platform</p>
+            <p className="font-bold text-white text-sm leading-none tracking-tight">NexMarket</p>
+            <p className="text-[11px] text-blue-400 mt-0.5 font-medium">AI Platform</p>
           </div>
         </div>
+        {mounted && (
+          <button
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white transition-colors border border-slate-700"
+            title="Toggle theme"
+          >
+            {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+          </button>
+        )}
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 p-3 space-y-1">
-        {NAV.map(({ href, label, icon: Icon }) => {
-          const active =
-            href === "/" ? pathname === "/" : pathname.startsWith(href);
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={clsx(
-                "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 group",
-                active
-                  ? "bg-brand-500/20 text-brand-300 border border-brand-500/30"
-                  : "text-slate-600 hover:text-slate-900 hover:bg-surface-muted"
-              )}
-            >
-              <Icon
-                size={16}
-                className={clsx(
-                  "flex-shrink-0 transition-colors",
-                  active ? "text-brand-600" : "text-slate-400 group-hover:text-slate-700"
-                )}
-              />
-              {label}
-              {active && (
-                <ChevronRight size={12} className="ml-auto text-brand-400" />
-              )}
-            </Link>
-          );
-        })}
+      {/* Navigation */}
+      <nav className="flex-1 px-3 py-4 space-y-6 overflow-y-auto">
+        {NAV_GROUPS.map((group) => (
+          <div key={group.title}>
+            <p className="px-3 mb-2 text-xs font-semibold text-slate-500 tracking-wider">
+              {group.title}
+            </p>
+            <div className="space-y-0.5">
+              {group.items.map(({ href, label, icon: Icon }) => {
+                const active = href !== "#" && (href === "/" ? pathname === "/" : pathname.startsWith(href));
+                return (
+                  <Link
+                    key={label}
+                    href={href}
+                    prefetch={true}
+                    className={clsx(
+                      "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all duration-150 nav-item",
+                      active
+                        ? "bg-blue-600 text-white font-semibold border-l-[3px] border-white pl-[9px]"
+                        : "text-slate-400 font-medium hover:bg-slate-800 hover:text-slate-200"
+                    )}
+                  >
+                    <Icon
+                      size={16}
+                      className={clsx(
+                        "flex-shrink-0",
+                        active ? "text-white" : "text-slate-400"
+                      )}
+                    />
+                    {label}
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
 
-      {/* Footer */}
-      <div className="p-4 border-t border-surface-border">
-        <div className="glass rounded-lg p-3">
-          <p className="text-xs text-slate-700 font-medium">Demo Mode</p>
-          <p className="text-xs text-slate-500 mt-0.5">Mock posting active</p>
-          <div className="mt-2 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-xs text-emerald-400">All systems healthy</span>
+      {/* Footer — AI Credits & User Profile */}
+      <div className="px-3 py-4 border-t border-slate-800 space-y-4">
+        {/* AI Credits */}
+        <div className="px-2">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <div className="w-5 h-5 rounded-full bg-violet-900/50 flex items-center justify-center border border-violet-700/50">
+                <Zap size={10} className="text-violet-400" />
+              </div>
+              <span className="text-xs font-semibold text-slate-300">AI Credits</span>
+            </div>
+            <span className="text-[10px] text-slate-400 font-medium">320 / 1000</span>
           </div>
+          <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+            <div className="h-full bg-gradient-to-r from-violet-600 to-fuchsia-500 rounded-full" style={{ width: '32%' }} />
+          </div>
+        </div>
+
+        {/* User Profile */}
+        <div className="flex items-center justify-between p-2 hover:bg-slate-800 rounded-lg cursor-pointer transition-colors group">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center overflow-hidden flex-shrink-0">
+              <Users size={16} className="text-slate-400" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-white leading-none mb-1">Revanth</p>
+              <p className="text-[10px] text-slate-400 leading-none">Student</p>
+            </div>
+          </div>
+          <ChevronRight size={16} className="text-slate-500 group-hover:text-slate-300 transition-colors" />
         </div>
       </div>
     </aside>

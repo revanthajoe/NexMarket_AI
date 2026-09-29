@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
-import { Loader2, Send, Activity, RefreshCw, BarChart3 } from "lucide-react";
+import { Loader2, Send, Activity, RefreshCw, BarChart3, AlertTriangle } from "lucide-react";
 import { api, Campaign, IntegrationStatus, SocialPost } from "@/lib/api";
 
 export default function PostingStudioPage() {
@@ -14,7 +14,7 @@ export default function PostingStudioPage() {
   const [health, setHealth] = useState<Record<string, IntegrationStatus> | null>(null);
 
   useEffect(() => {
-    api.campaigns.list().then(res => {
+    api.campaigns.list().then((res) => {
       setCampaigns(res);
       if (res.length > 0) setSelectedCampaign(res[0].id);
     }).catch(() => {});
@@ -64,73 +64,84 @@ export default function PostingStudioPage() {
   };
 
   const icons: Record<string, string> = {
-    posted: "✅", pending: "⏳", failed: "❌"
+    posted: "✅", pending: "⏳", failed: "❌",
   };
 
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
-            <Send size={20} className="text-brand-400" />
+        <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center">
+            <Send size={18} className="text-blue-600" />
           </div>
           Social Media Posting Studio
         </h1>
-        <p className="text-slate-400 mt-2 text-sm">
+        <p className="text-slate-500 mt-1.5 text-sm">
           Monitor and manage cross-platform social media distributions
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
-          <div className="glass-dynamic rounded-xl p-5 animate-fade-in-up">
-            <label htmlFor="posting-campaign" className="text-xs font-medium text-slate-400 uppercase tracking-wide">Select Campaign</label>
-            <select 
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 animate-fade-in-up">
+            <label htmlFor="posting-campaign" className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+              Select Campaign
+            </label>
+            <select
               id="posting-campaign"
               name="posting-campaign"
-              className="input-dark mt-2" 
-              value={selectedCampaign} 
-              onChange={e => setSelectedCampaign(e.target.value)}
+              className="input-dark mt-2"
+              value={selectedCampaign}
+              onChange={(e) => setSelectedCampaign(e.target.value)}
             >
               {campaigns.length === 0 && <option value="">No campaigns available</option>}
-              {campaigns.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
           </div>
 
-          <div className="glass-dynamic rounded-xl p-5 animate-fade-in-up delay-100">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold text-slate-800">Post Timeline</h2>
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 animate-fade-in-up delay-100">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-4">
+              <h2 className="text-base font-semibold text-slate-800">Post Timeline</h2>
               <button
                 onClick={handleSyncMetrics}
                 disabled={syncing || !selectedCampaign}
-                className="text-xs px-3 py-2 rounded-lg bg-surface-muted hover:bg-surface-border transition-colors text-slate-300 flex items-center gap-2 disabled:opacity-50"
+                className="text-xs px-4 py-2 rounded-lg bg-slate-50 border border-slate-200 hover:bg-slate-100 hover:border-slate-300 transition-colors text-slate-600 font-medium flex items-center gap-2 disabled:opacity-50"
               >
-                {syncing ? <Loader2 size={13} className="animate-spin" /> : <BarChart3 size={13} />}
-                Sync Engagement
+                {syncing ? <Loader2 size={13} className="animate-spin text-blue-500" /> : <BarChart3 size={13} className="text-slate-400" />}
+                Sync Engagement Metrics
               </button>
             </div>
             {loading ? (
-              <div className="flex justify-center p-10"><Loader2 className="animate-spin text-brand-400" /></div>
+              <div className="flex justify-center p-12"><Loader2 className="animate-spin text-blue-500" /></div>
             ) : posts.length === 0 ? (
-              <div className="p-10 border border-dashed border-surface-border rounded-xl text-center text-slate-500 text-sm">
+              <div className="p-12 border-2 border-dashed border-slate-200 rounded-xl flex flex-col items-center justify-center text-slate-500 text-sm gap-3">
+                <Send size={24} className="text-slate-300" />
                 No posts found for this campaign.
               </div>
             ) : (
-              <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+              <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
                 {posts.map((p, i) => (
-                  <div key={p.id} className="glass-dynamic rounded-xl p-4 flex items-center justify-between animate-fade-in-up" style={{ animationDelay: `${i * 100}ms` }}>
-                    <div className="flex items-center gap-3">
-                      <span className="text-xl">{icons[p.status] || "🔄"}</span>
+                  <div key={p.id} className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start sm:items-center justify-between gap-4 animate-fade-in-up" style={{ animationDelay: `${i * 80}ms` }}>
+                    <div className="flex items-start sm:items-center gap-3">
+                      <span className="text-xl leading-none mt-0.5 sm:mt-0">{icons[p.status] || "🔄"}</span>
                       <div>
-                        <p className="text-sm font-medium text-slate-800 capitalize">{p.platform}</p>
-                        <p className="text-xs text-slate-500">
-                          {new Date(p.created_at).toLocaleString()} {p.is_mock && <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] badge-mock">Mock</span>}
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-semibold text-slate-800 capitalize">{p.platform}</p>
+                          {p.is_mock && <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-50 text-blue-600 border border-blue-200 font-semibold">Mock</span>}
+                        </div>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {new Date(p.created_at).toLocaleString()}
                         </p>
-                        {p.error_message && <p className="text-xs text-rose-400 mt-1">{p.error_message}</p>}
+                        {p.error_message && (
+                          <div className="flex gap-1.5 mt-2 bg-rose-50 text-rose-700 px-3 py-2 rounded-lg text-xs border border-rose-100">
+                            <AlertTriangle size={12} className="flex-shrink-0 mt-0.5" />
+                            <span className="leading-relaxed">{p.error_message}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                     {p.status === "failed" && (
-                      <button onClick={() => handleRetry(p.id)} className="p-2 rounded-lg bg-surface-muted hover:bg-surface-border transition-colors text-slate-300">
+                      <button onClick={() => handleRetry(p.id)} className="p-2 rounded-lg bg-white border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-colors text-slate-500 flex-shrink-0 shadow-sm">
                         <RefreshCw size={14} />
                       </button>
                     )}
@@ -142,31 +153,29 @@ export default function PostingStudioPage() {
         </div>
 
         <div className="space-y-4 animate-fade-in-up delay-150">
-          <div className="glass-dynamic rounded-xl p-6">
-            <h2 className="text-sm font-semibold text-brand-400 uppercase tracking-wide mb-4 flex items-center gap-2">
-              <Activity size={16} /> API Health Status
+          <div className="bg-white border border-slate-200 rounded-2xl p-6">
+            <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-5 flex items-center gap-2">
+              <Activity size={15} /> API Health Status
             </h2>
             {!health ? (
-              <div className="flex justify-center p-4"><Loader2 className="animate-spin text-slate-500" /></div>
+              <div className="flex justify-center p-8"><Loader2 className="animate-spin text-slate-400" /></div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-2.5">
                 {Object.entries(health).map(([platform, s]) => {
-                  // A mock adapter always answers "healthy" — showing that as
-                  // Operational claimed a connection that doesn't exist.
                   const label = !s.configured
-                    ? { text: "Not configured", dot: "bg-slate-500", fg: "text-slate-400" }
+                    ? { text: "Not configured", dot: "bg-slate-400", fg: "text-slate-500", border: "border-slate-200", bg: "bg-slate-50" }
                     : s.healthy
-                      ? { text: "Operational", dot: "bg-emerald-400 animate-pulse", fg: "text-emerald-400" }
-                      : { text: "Credentials failing", dot: "bg-rose-400", fg: "text-rose-400" };
+                      ? { text: "Operational", dot: "bg-emerald-500", fg: "text-emerald-700", border: "border-emerald-200", bg: "bg-emerald-50" }
+                      : { text: "Credentials failing", dot: "bg-rose-500", fg: "text-rose-700", border: "border-rose-200", bg: "bg-rose-50" };
                   return (
-                    <div key={platform} className="flex justify-between items-center p-3 rounded-lg bg-surface-muted/30 border border-surface-border">
-                      <span className="text-sm text-slate-300 capitalize flex items-center gap-2">
-                        {platform}
+                    <div key={platform} className={`flex justify-between items-center p-3.5 rounded-xl border ${label.border} ${label.bg}`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-slate-700 capitalize">{platform}</span>
                         {s.mode === "mock" && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] badge-mock">Mock</span>
+                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-100 text-blue-700 border border-blue-200 font-semibold">Mock</span>
                         )}
-                      </span>
-                      <span className="flex items-center gap-1.5 text-xs">
+                      </div>
+                      <span className="flex items-center gap-1.5 text-xs font-medium">
                         <span className={`w-2 h-2 rounded-full ${label.dot}`} />
                         <span className={label.fg}>{label.text}</span>
                       </span>
@@ -175,6 +184,9 @@ export default function PostingStudioPage() {
                 })}
               </div>
             )}
+            <p className="text-[10px] text-slate-400 leading-relaxed mt-4 pt-4 border-t border-slate-100">
+              Note: Mock adapters always report as healthy since they bypass real external API credential checks.
+            </p>
           </div>
         </div>
       </div>

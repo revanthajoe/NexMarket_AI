@@ -89,7 +89,7 @@ describe("PostingTab", () => {
     render(
       <PostingTab posts={posts} campaignId="c1" copies={[]} posters={[]} onPost={vi.fn()} loading={false} />
     );
-    expect(screen.getByText("mock")).toBeInTheDocument();
+    expect(screen.getByText(/mock/i)).toBeInTheDocument();
   });
 });
 
@@ -97,7 +97,7 @@ describe("AdCopyTab", () => {
   it("shows the fallback badge when the selected copy failed generation", () => {
     const copies = [makeAdCopy({ fallback: true })];
     render(<AdCopyTab copies={copies} campaignId="c1" onGenerate={vi.fn()} loading={false} />);
-    expect(screen.getByText("fallback")).toBeInTheDocument();
+    expect(screen.getByText(/fallback/i)).toBeInTheDocument();
   });
 
   it("does not show the fallback badge for a real generation result", () => {
