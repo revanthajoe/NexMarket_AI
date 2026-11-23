@@ -11,16 +11,29 @@ Routes:
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Literal, Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.ai.brand_kit import get_brand_kit, save_brand_asset, save_brand_meta
+from app.core.security import require_app_api_key
+from app.db.session import get_db
+from app.models.models import Campaign
+
+from app.services.ai.brand_kit import (
+    get_brand_kit,
+    save_brand_asset,
+    save_brand_meta,
+    validate_asset_bytes,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/brand-kit", tags=["Brand Kit"])
 
 _MAX_FILE_MB = 10
+_IMAGE_MIME = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
+_FONT_MIME = {"font/ttf": "ttf", "font/otf": "otf", "application/x-font-ttf": "ttf"}
 
 AssetType = Literal[
     "logo", "partner_logo", "product", "product_cutout",
@@ -33,6 +46,8 @@ async def upload_brand_asset(
     campaign_id: str,
     asset_type: AssetType = Form(...),
     file: UploadFile = File(...),
+    _: None = Depends(require_app_api_key),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Upload a brand asset.
@@ -41,11 +56,25 @@ async def upload_brand_asset(
     brochure hero image and is composited as-is (no background removal is
     performed; see the note in services/ai/brand_kit.py).
     """
+    if not await db.get(Campaign, campaign_id):
+        raise HTTPException(404, "Campaign not found")
     content = await file.read()
     if len(content) > _MAX_FILE_MB * 1024 * 1024:
         raise HTTPException(400, f"File too large (max {_MAX_FILE_MB}MB)")
 
-    path = save_brand_asset(campaign_id, asset_type, content, file.filename or f"{asset_type}.bin")
+    mime = (file.content_type or "").lower()
+    allowed = _FONT_MIME if asset_type.startswith("font_") else _IMAGE_MIME
+    extension = allowed.get(mime)
+    if extension is None:
+        suffix = (Path(file.filename or "").suffix.lower().lstrip("."))
+        extension = suffix if suffix in set(allowed.values()) else None
+    if extension is None:
+        raise HTTPException(415, "Unsupported asset type or content type")
+    try:
+        validate_asset_bytes(asset_type, content, extension)
+    except ValueError as exc:
+        raise HTTPException(415, str(exc)) from exc
+    path = save_brand_asset(campaign_id, asset_type, content, f"{asset_type}.{extension}")
     logger.info("brand_kit_upload campaign=%s type=%s", campaign_id, asset_type)
     return {"status": "ok", "asset_type": asset_type, "path": path}
 
@@ -59,6 +88,8 @@ async def set_brand_meta(
     website: Optional[str] = Form(None),
     address_en: Optional[str] = Form(None),
     address_ta: Optional[str] = Form(None),
+    _: None = Depends(require_app_api_key),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Set language code (en/hi/ta/...), brand colour (#RRGGBB) and contact details.
@@ -66,6 +97,8 @@ async def set_brand_meta(
     Fields are merged, not replaced — omitting a field leaves the stored value
     alone, so saving just the language cannot wipe the contact block.
     """
+    if not await db.get(Campaign, campaign_id):
+        raise HTTPException(404, "Campaign not found")
     meta = save_brand_meta(
         campaign_id,
         language=language,
@@ -79,8 +112,13 @@ async def set_brand_meta(
 
 
 @router.get("/{campaign_id}")
-async def get_brand_kit_info(campaign_id: str):
+async def get_brand_kit_info(
+    campaign_id: str,
+    db: AsyncSession = Depends(get_db),
+):
     """Return the current brand kit configuration for a campaign."""
+    if not await db.get(Campaign, campaign_id):
+        raise HTTPException(404, "Campaign not found")
     kit = get_brand_kit(campaign_id)
     return {
         "campaign_id":     campaign_id,

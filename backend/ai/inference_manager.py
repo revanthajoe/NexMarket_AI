@@ -4,9 +4,10 @@ ai/inference_manager.py
 High-level async interface between FastAPI endpoints and ModelManager.
 
 Every public method:
-  1. Acquires the GPU slot via ModelManager.session(key)
+  1. Acquires the GPU slot via ModelManager.session(key) — the model stays
+     resident afterwards and is reused by later calls to the same key
   2. Runs inference in executor (blocking I/O won't block event loop)
-  3. ModelManager auto-unloads + purges after session exits
+  3. Releases the slot; ModelManager unloads only when the model changes
 
 FastAPI endpoints should import inference_manager, never services directly.
 
@@ -167,20 +168,16 @@ class InferenceManager:
         campaign_goal: Optional[str] = None,
         budget: Optional[float] = None,
         target_audience: Optional[str] = None,
+        platform_history: Optional[dict] = None,
     ) -> dict:
-        """Run Thompson Sampling bandit optimisation (CPU, no model load)."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None,
-            lambda: bandit_service.select_arm(campaign_goal, budget, target_audience),
+        """Run Thompson Sampling bandit optimisation (CPU, DB load)."""
+        return await bandit_service.select_arm(
+            campaign_goal, budget, target_audience, platform_history=platform_history
         )
 
-    async def record_campaign_result(self, platform: str, clicked: bool) -> None:
+    async def record_campaign_result(self, platform: str, clicked: bool, campaign_goal: str = None, target_audience: str = None) -> None:
         """Feed real-world click result back to the bandit."""
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(
-            None, lambda: bandit_service.record_reward(platform, clicked)
-        )
+        await bandit_service.record_reward(platform, clicked, campaign_goal, target_audience)
 
     # ─────────────────────────────────────────────────────────────────────────
     # System status

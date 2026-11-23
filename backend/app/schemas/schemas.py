@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ─── Campaign ────────────────────────────────────────────────────────────────
@@ -146,13 +146,23 @@ class PosterEvaluationRead(BaseModel):
 class AdCopyGenerateRequest(BaseModel):
     campaign_id: str
     platforms: List[str] = Field(
-        default=["instagram", "facebook", "telegram", "whatsapp", "email"]
+        default=["instagram", "facebook", "telegram", "whatsapp", "email"],
+        min_length=1,
     )
     tone: Optional[str] = "professional"
     language: Optional[str] = Field(
         None,
         description="Ad copy language code (en/hi/ta/te/mr/es/fr). Falls back to the campaign's brand kit language.",
     )
+
+    @field_validator("platforms")
+    @classmethod
+    def validate_platforms(cls, platforms: List[str]) -> List[str]:
+        allowed = {"instagram", "facebook", "telegram", "whatsapp", "email"}
+        invalid = sorted(set(platforms) - allowed)
+        if invalid:
+            raise ValueError(f"Unsupported ad-copy platform(s): {', '.join(invalid)}")
+        return platforms
 
 
 class AdCopyRead(BaseModel):
@@ -346,6 +356,7 @@ class PostStatusRead(BaseModel):
 class N8nTriggerCampaign(BaseModel):
     campaign_id: str
     execution_id: Optional[str] = None
+    force_poster: bool = False
     steps: List[str] = Field(
         # Full pipeline order — each step only runs when its name is present.
         # Logical dependency order:
@@ -378,6 +389,40 @@ class N8nWebhookResponse(BaseModel):
     data: Optional[Dict[str, Any]] = None
 
 
+class AnalyticsIngestRequest(BaseModel):
+    campaign_id: str = Field(..., min_length=1)
+    platform: str = Field(default="unknown", min_length=1)
+    event_date: datetime = Field(default_factory=datetime.utcnow)
+    impressions: int = Field(default=0, ge=0)
+    clicks: int = Field(default=0, ge=0)
+    likes: int = Field(default=0, ge=0)
+    shares: int = Field(default=0, ge=0)
+    comments: int = Field(default=0, ge=0)
+    reach: int = Field(default=0, ge=0)
+    reactions: int = Field(default=0, ge=0)
+    ctr: float = Field(default=0.0, ge=0, le=1)
+    spend: float = Field(default=0.0, ge=0)
+    source_type: str = "UNKNOWN"
+    source_system: Optional[str] = None
+    source_reference: Optional[str] = None
+
+    @field_validator("platform")
+    @classmethod
+    def validate_platform(cls, value: str) -> str:
+        allowed = {"instagram", "facebook", "telegram", "whatsapp", "unknown"}
+        normalized = value.strip().lower()
+        if normalized not in allowed:
+            raise ValueError("Unsupported analytics platform")
+        return normalized
+
+    @field_validator("source_type")
+    @classmethod
+    def validate_source_type(cls, value: str) -> str:
+        if value not in {"ACTUAL", "SIMULATED", "UNKNOWN"}:
+            raise ValueError("source_type must be ACTUAL, SIMULATED, or UNKNOWN")
+        return value
+
+
 # ─── Analytics Dashboard ─────────────────────────────────────────────────────
 
 class DashboardSummary(BaseModel):
@@ -388,3 +433,8 @@ class DashboardSummary(BaseModel):
     avg_engagement_rate: float
     total_leads: int
     hot_leads: int
+    # Analysed-comment sentiment split (stored DistilBERT labels).
+    sentiment_positive: int
+    sentiment_neutral: int
+    sentiment_negative: int
+    sentiment_total: int

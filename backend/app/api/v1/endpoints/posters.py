@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
+from app.core.security import require_app_api_key
 from app.db.session import get_db
 from app.models.models import Campaign, ModelVersion, Poster, PosterEvaluation, PosterFeedback
 from app.schemas.schemas import PosterEvaluationRead, PosterFeedbackCreate, PosterFeedbackRead, PosterGenerateRequest, PosterRead
@@ -28,15 +29,17 @@ async def list_posters_by_campaign(campaign_id: str, db: AsyncSession = Depends(
     from sqlalchemy import select
     result = await db.execute(
         select(Poster)
-        .where(Poster.campaign_id == campaign_id, Poster.provider != "mock")
-        .order_by(Poster.variation_index)
+        .where(Poster.campaign_id == campaign_id)
+        .order_by(Poster.version, Poster.variation_index)
     )
     return result.scalars().all()
 
 
 @router.post("/generate", response_model=List[PosterRead])
 async def generate_posters(
-    payload: PosterGenerateRequest, db: AsyncSession = Depends(get_db)
+    payload: PosterGenerateRequest,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
 ):
     campaign = await db.get(Campaign, payload.campaign_id)
     if not campaign:
@@ -133,7 +136,11 @@ async def generate_posters(
 
 
 @router.post("/{poster_id}/evaluate", response_model=PosterEvaluationRead)
-async def evaluate_poster(poster_id: str, db: AsyncSession = Depends(get_db)):
+async def evaluate_poster(
+    poster_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
+):
     poster = await db.get(Poster, poster_id)
     if not poster:
         raise HTTPException(status_code=404, detail="Poster not found")
@@ -194,7 +201,12 @@ async def list_feedback(poster_id: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{poster_id}/feedback", response_model=PosterFeedbackRead)
-async def add_feedback(poster_id: str, payload: PosterFeedbackCreate, db: AsyncSession = Depends(get_db)):
+async def add_feedback(
+    poster_id: str,
+    payload: PosterFeedbackCreate,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
+):
     poster = await db.get(Poster, poster_id)
     if not poster:
         raise HTTPException(status_code=404, detail="Poster not found")
@@ -218,7 +230,11 @@ async def add_feedback(poster_id: str, payload: PosterFeedbackCreate, db: AsyncS
 
 
 @router.post("/{poster_id}/regenerate", response_model=PosterRead)
-async def regenerate_poster(poster_id: str, db: AsyncSession = Depends(get_db)):
+async def regenerate_poster(
+    poster_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
+):
     source = await db.get(Poster, poster_id)
     if not source:
         raise HTTPException(status_code=404, detail="Poster not found")

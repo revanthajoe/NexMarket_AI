@@ -43,7 +43,7 @@
         "method": "POST",
         "url": "={{ ($env.NEXMARKET_BACKEND_URL || 'http://localhost:8000') + '/api/v1/n8n/trigger/campaign' }}",
         "bodyType": "json",
-        "body": "={{ JSON.stringify({ campaign_id: $('Webhook Trigger').item.json.campaign_id, steps: ['poster','evaluate','adcopy','optimize'], platforms: $('Webhook Trigger').item.json.platforms, execution_id: $execution.id }) }}",
+        "body": "={{ JSON.stringify({ campaign_id: $('Webhook Trigger').item.json.campaign_id, steps: ['poster','evaluate','adcopy','optimize'], platforms: $('Webhook Trigger').item.json.platforms, force_poster: $('Webhook Trigger').item.json.force_poster || false, execution_id: $execution.id }) }}",
         "options": {"response": {"response": {"neverError": true}}}
       }
     },

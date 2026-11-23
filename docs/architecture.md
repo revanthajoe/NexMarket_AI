@@ -65,10 +65,12 @@ are explicitly marked as `FALLBACK`.
 
 ## Database
 
-Dev uses SQLite (`nexmarket.db`) with WAL mode, a 30s busy timeout, and
-foreign keys enabled — set once via an engine-level `connect` listener in
+PostgreSQL is the default database whenever `DATABASE_URL` is configured.
+SQLite (`nexmarket.db`) is an explicit opt-in via
+`USE_SQLITE_FALLBACK=true`; it uses WAL mode, a 30s busy timeout, and foreign
+keys enabled — set once via an engine-level `connect` listener in
 `app/db/session.py` so every connection gets them, not just the first one.
-Docker/production uses PostgreSQL 16 via the same SQLAlchemy async models;
+Docker/production uses PostgreSQL via the same SQLAlchemy async models;
 schema changes are tracked as Alembic migrations under `backend/alembic/versions/`
 and must be applied with `alembic upgrade head` (SQLite dev also gets its
 schema from `Base.metadata.create_all()` at startup, but that only creates

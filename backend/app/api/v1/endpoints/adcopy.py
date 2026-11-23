@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.core.security import require_app_api_key
 from app.models.models import AdCopy, Campaign
 from app.schemas.schemas import AdCopyGenerateRequest, AdCopyRead
 from app.services.ai.ad_generator import ad_copy_generator
@@ -19,7 +20,9 @@ router = APIRouter(prefix="/adcopy", tags=["Ad Copy"])
 
 @router.post("/generate", response_model=List[AdCopyRead])
 async def generate_ad_copy(
-    payload: AdCopyGenerateRequest, db: AsyncSession = Depends(get_db)
+    payload: AdCopyGenerateRequest,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
 ):
     campaign = await db.get(Campaign, payload.campaign_id)
     if not campaign:

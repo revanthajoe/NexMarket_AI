@@ -22,6 +22,8 @@ import { clsx } from "clsx";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
 
+type ProfileDetails = { name: string; role: string };
+
 const NAV_GROUPS = [
   {
     title: "MAIN",
@@ -35,7 +37,7 @@ const NAV_GROUPS = [
     title: "AI",
     items: [
       { href: "/poster",       label: "Poster Gallery",  icon: ImageIcon },
-      { href: "#",             label: "Ad Copy",         icon: Type },
+      { href: "/adcopy",       label: "Ad Copy",         icon: Type },
       { href: "/leads",        label: "Leads & Sentiment", icon: Users },
     ]
   },
@@ -64,7 +66,22 @@ export function Sidebar() {
   const pathname = usePathname();
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const [profile, setProfile] = useState<ProfileDetails>({ name: "Revanth", role: "Student" });
+
+  useEffect(() => {
+    setMounted(true);
+    const loadProfile = () => {
+      try {
+        const saved = window.localStorage.getItem("nexmarket-profile");
+        if (saved) setProfile(JSON.parse(saved) as ProfileDetails);
+      } catch {
+        window.localStorage.removeItem("nexmarket-profile");
+      }
+    };
+    loadProfile();
+    window.addEventListener("nexmarket-profile-updated", loadProfile);
+    return () => window.removeEventListener("nexmarket-profile-updated", loadProfile);
+  }, []);
 
   return (
     <aside className="w-60 flex-shrink-0 flex flex-col bg-slate-900 border-r border-slate-800">
@@ -128,37 +145,20 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* Footer — AI Credits & User Profile */}
-      <div className="px-3 py-4 border-t border-slate-800 space-y-4">
-        {/* AI Credits */}
-        <div className="px-2">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <div className="w-5 h-5 rounded-full bg-violet-900/50 flex items-center justify-center border border-violet-700/50">
-                <Zap size={10} className="text-violet-400" />
-              </div>
-              <span className="text-xs font-semibold text-slate-300">AI Credits</span>
-            </div>
-            <span className="text-[10px] text-slate-400 font-medium">320 / 1000</span>
-          </div>
-          <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-            <div className="h-full bg-gradient-to-r from-violet-600 to-fuchsia-500 rounded-full" style={{ width: '32%' }} />
-          </div>
-        </div>
-
-        {/* User Profile */}
-        <div className="flex items-center justify-between p-2 hover:bg-slate-800 rounded-lg cursor-pointer transition-colors group">
+      {/* Footer — User Profile */}
+      <div className="px-3 py-4 border-t border-slate-800">
+        <Link href="/profile" className="flex items-center justify-between p-2 hover:bg-slate-800 rounded-lg transition-colors group">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center overflow-hidden flex-shrink-0">
               <Users size={16} className="text-slate-400" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-white leading-none mb-1">Revanth</p>
-              <p className="text-[10px] text-slate-400 leading-none">Student</p>
+              <p className="text-sm font-semibold text-white leading-none mb-1">{profile.name}</p>
+              <p className="text-[10px] text-slate-400 leading-none">{profile.role}</p>
             </div>
           </div>
           <ChevronRight size={16} className="text-slate-500 group-hover:text-slate-300 transition-colors" />
-        </div>
+        </Link>
       </div>
     </aside>
   );

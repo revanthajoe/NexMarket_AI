@@ -60,8 +60,15 @@ def upgrade() -> None:
         for column in columns:
             op.add_column(table, column)
 
-    op.execute("UPDATE analytics_events SET source_type='SIMULATED' WHERE is_mock = 1")
-    op.execute("UPDATE ad_copies SET source_type='FALLBACK' WHERE fallback = 1")
+    # `is_mock` and `fallback` are Boolean columns on PostgreSQL; comparing
+    # them to SQLite's integer representation (`= 1`) fails there.
+    # `IS TRUE` is accepted by both PostgreSQL and SQLite.
+    op.execute(
+        "UPDATE analytics_events SET source_type='SIMULATED' WHERE is_mock IS TRUE"
+    )
+    op.execute(
+        "UPDATE ad_copies SET source_type='FALLBACK' WHERE fallback IS TRUE"
+    )
 
 
 def downgrade() -> None:

@@ -550,8 +550,11 @@ class PosterGeneratorService:
                     headline=brochure_spec.get("headline_en", "") or brochure_spec.get("headline", ""),
                     subheadline=brochure_spec.get("subheadline_en", "") or brochure_spec.get("subheadline", ""),
                     supporting_message=brochure_spec.get("why_title_en", "") or brochure_spec.get("why_title", ""),
-                    offer=cta,
+                    # Offer band and CTA pill are separate elements — passing the
+                    # CTA here printed the button label twice and dropped the offer.
+                    offer=brochure_spec.get("offer_en") or offer,
                     cta=cta,
+                    brand_color_hex=kit.brand_color_hex or "",
                     visual_subject=subject,
                     visual_style=style,
                     composition_strategy=comp_strategy,

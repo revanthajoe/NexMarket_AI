@@ -1,13 +1,14 @@
 """Campaign CRUD endpoints."""
 from __future__ import annotations
 
-from typing import List
+from typing import List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.core.security import require_app_api_key
 from app.models.models import Campaign
 from app.schemas.schemas import CampaignCreate, CampaignRead, CampaignSummary
 
@@ -15,7 +16,11 @@ router = APIRouter(prefix="/campaigns", tags=["Campaigns"])
 
 
 @router.post("/", response_model=CampaignRead, status_code=status.HTTP_201_CREATED)
-async def create_campaign(payload: CampaignCreate, db: AsyncSession = Depends(get_db)):
+async def create_campaign(
+    payload: CampaignCreate,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
+):
     campaign = Campaign(**payload.model_dump(exclude={"post_schedule"}))
     db.add(campaign)
     await db.flush()
@@ -42,8 +47,9 @@ async def get_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)):
 @router.patch("/{campaign_id}/status")
 async def update_status(
     campaign_id: str,
-    status_val: str,
+    status_val: Literal["draft", "generating", "ready", "posted", "archived", "failed"],
     db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
 ):
     campaign = await db.get(Campaign, campaign_id)
     if not campaign:
@@ -53,7 +59,11 @@ async def update_status(
 
 
 @router.delete("/{campaign_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_campaign(campaign_id: str, db: AsyncSession = Depends(get_db)):
+async def delete_campaign(
+    campaign_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
+):
     campaign = await db.get(Campaign, campaign_id)
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")

@@ -25,7 +25,10 @@ from pathlib import Path
 
 import pytest
 
-_TEST_DB_PATH = Path(tempfile.gettempdir()) / "nexmarket_test.db"
+# Each pytest process gets its own database. A fixed path made two legitimate
+# focused runs contend over the same SQLite file and corrupt schema setup.
+_TEST_DB_DIR = Path(tempfile.mkdtemp(prefix="nexmarket-pytest-"))
+_TEST_DB_PATH = _TEST_DB_DIR / "nexmarket_test.db"
 
 
 def _remove_db_files() -> None:
@@ -47,6 +50,10 @@ def _remove_db_files() -> None:
 
 _remove_db_files()  # best-effort; see _sessions_finish note on why this can't be relied on
 os.environ["SQLITE_DB_PATH"] = str(_TEST_DB_PATH)
+# Tests must never use the developer's configured PostgreSQL database. The
+# application remains PostgreSQL-backed when launched normally; this override
+# applies only before pytest imports the settings singleton.
+os.environ["USE_SQLITE_FALLBACK"] = "true"
 # Tests must not publish to real integrations just because a developer's local
 # .env enables live mode. Individual live-adapter tests monkeypatch the adapter.
 os.environ["SOCIAL_MODE"] = "mock"

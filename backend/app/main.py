@@ -34,6 +34,16 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     logger.info("nexmarket_starting", env=settings.APP_ENV)
 
+    if (
+        settings.APP_ENV == "development"
+        and settings.SOCIAL_MODE == "live"
+        and len(settings.TELEGRAM_WEBHOOK_SECRET) < 16
+    ):
+        logger.warning(
+            "telegram_webhook_secret_missing_or_weak",
+            extra={"message": "Live Telegram mode is enabled without a strong webhook secret"},
+        )
+
     # Ensure upload directory exists
     import os
     os.makedirs(settings.POSTER_UPLOAD_DIR, exist_ok=True)
@@ -52,20 +62,36 @@ async def lifespan(app: FastAPI):
     async with AsyncSessionLocal() as metadata_db:
         await register_runtime_models(metadata_db)
 
+    from app.services.posting.posting_service import social_posting_service
+    async with AsyncSessionLocal() as posting_db:
+        await social_posting_service.fail_unavailable_live_posts(posting_db)
+
     # Pre-warm ML models in background (non-blocking)
     import asyncio
 
     async def warm_models():
+        # There are no `_load_*` helpers to import — both adapters go through
+        # InferenceManager, which loads its model on the first call. The old
+        # imports raised ImportError, `pass` swallowed it, and every first
+        # sentiment/lead request paid the cold start instead.
+        from app.services.ai.lead_prediction import lead_prediction_service
+        from app.services.ai.sentiment import sentiment_service
+
         try:
-            from app.services.ai.sentiment import _load_pipeline
-            _load_pipeline()
-        except Exception:
-            pass
+            await lead_prediction_service.predict(
+                clicks=0, views=1, time_spent_seconds=0, prior_purchases=0,
+                source_platform="other", device="mobile", age_group="25-34",
+                location_tier=1,
+            )
+        except Exception as exc:
+            logger.info("warmup_lead_skipped reason=%s", exc)
+        # DistilBERT is warmed last on purpose: only one model stays resident, so
+        # the final warm-up is the one that survives, and its load (a HF
+        # pipeline) is by far the expensive one. XGBoost just reads a booster file.
         try:
-            from app.services.ai.lead_prediction import _load_or_train_model
-            _load_or_train_model()
-        except Exception:
-            pass
+            await sentiment_service.analyze(["warm up"], source_type="ACTUAL")
+        except Exception as exc:
+            logger.info("warmup_sentiment_skipped reason=%s", exc)
 
     asyncio.create_task(warm_models())
 

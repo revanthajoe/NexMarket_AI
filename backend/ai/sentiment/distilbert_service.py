@@ -77,7 +77,8 @@ class DistilBERTService(BaseModelService):
             "negative_score": float,
             "neutral_score":  float,
             "confidence":     float,
-            "model_used":     "distilbert",
+            "model_used":     "distilbert" | "keyword-fallback",
+            "fallback":       bool,   # True when the keyword guess was used
           }
         """
         if not texts:
@@ -122,6 +123,7 @@ def _normalize(text: str, result: list) -> dict:
         "neutral_score":   round(neu, 4),
         "confidence":      round(conf, 4),
         "model_used":      "distilbert",
+        "fallback":        False,
     }
 
 
@@ -139,4 +141,7 @@ def _keyword_fallback(text: str) -> dict:
         "text": text, "label": label,
         "positive_score": ps, "negative_score": ns, "neutral_score": round(1-ps-ns, 2),
         "confidence": max(ps, ns), "model_used": "keyword-fallback",
+        # No model ran: this keyword guess must be reported as a fallback, never
+        # as a prediction (callers drop model_name/model_version when it is set).
+        "fallback": True,
     }

@@ -26,7 +26,8 @@ async def download_all():
         try:
             # model_manager.session(model_key) automatically triggers the .load() method,
             # which in turn triggers transformers/diffusers to download the weights.
-            # When the block exits, it unloads it from memory.
+            # The next model's session unloads this one; the weights themselves stay
+            # in the HF/diffusers cache either way.
             async with model_manager.session(model_key) as svc:
                 print(f"[{model_key}] Successfully downloaded and cached!\n")
         except Exception as e:

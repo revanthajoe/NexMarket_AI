@@ -22,4 +22,11 @@ describe("Phase 12 truthfulness primitives", () => {
     expect(screen.getByText("ACTUAL data only")).toBeInTheDocument();
     expect(screen.queryByText("completed")).not.toBeInTheDocument();
   });
+
+  it("supports explicit waiting and unavailable states", () => {
+    const { rerender } = render(<ProvenanceBadge value="WAITING" />);
+    expect(screen.getByText("WAITING")).toBeInTheDocument();
+    rerender(<ProvenanceBadge value="UNAVAILABLE" />);
+    expect(screen.getByText("UNAVAILABLE")).toBeInTheDocument();
+  });
 });

@@ -150,13 +150,29 @@ async def test_list_campaigns(client):
     assert isinstance(r.json(), list)
 
 
+@pytest.mark.asyncio
+async def test_campaign_status_validation(client):
+    created = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = created.json()["id"]
+
+    valid = await client.patch(f"/api/v1/campaigns/{cid}/status", params={"status_val": "ready"})
+    assert valid.status_code == 200
+    assert valid.json()["status"] == "ready"
+
+    invalid = await client.patch(f"/api/v1/campaigns/{cid}/status", params={"status_val": "deleted"})
+    assert invalid.status_code == 422
+
+
 # ── Sentiment ─────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_sentiment_analysis(client):
     r = await client.post(
         "/api/v1/sentiment/analyze",
-        json={"texts": ["This product is amazing!", "Terrible experience, very bad."]},
+        json={
+            "texts": ["This product is amazing!", "Terrible experience, very bad."],
+            "source_type": "ACTUAL",
+        },
     )
     assert r.status_code == 200
     data = r.json()
@@ -203,9 +219,8 @@ async def test_sentiment_fallback_is_not_actual(monkeypatch):
         raise RuntimeError("model unavailable")
 
     monkeypatch.setattr(inference_manager, "analyze_sentiment", failing_analyze)
-    result = await sentiment_service.analyze(["Customer comment"], source_type="ACTUAL")
-    assert result["results"][0]["source_type"] == "FALLBACK"
-    assert result["results"][0]["input_source_type"] == "ACTUAL"
+    with pytest.raises(RuntimeError, match="UNAVAILABLE"):
+        await sentiment_service.analyze(["Customer comment"], source_type="ACTUAL")
 
 
 # ── Lead Prediction ───────────────────────────────────────────────────────────
@@ -270,6 +285,17 @@ async def test_adcopy_generate_missing_campaign(client):
         json={"campaign_id": "does-not-exist", "platforms": ["instagram"]},
     )
     assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_adcopy_rejects_unsupported_platform(client):
+    created = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = created.json()["id"]
+    response = await client.post(
+        "/api/v1/adcopy/generate",
+        json={"campaign_id": cid, "platforms": ["instagram", "myspace"]},
+    )
+    assert response.status_code == 422
 
 
 # ── Forecasting (LSTM) ────────────────────────────────────────────────────────
@@ -357,6 +383,47 @@ async def test_analytics_ingest_requires_existing_campaign_and_explicit_provenan
     assert events[0]["source_type"] == "SIMULATED"
 
 
+@pytest.mark.asyncio
+async def test_analytics_ingest_validates_date_platform_and_metrics(client):
+    created = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = created.json()["id"]
+
+    invalid_cases = [
+        {"campaign_id": cid, "platform": "instagram", "event_date": "not-a-date"},
+        {"campaign_id": cid, "platform": "myspace", "source_type": "SIMULATED"},
+        {"campaign_id": cid, "platform": "instagram", "impressions": -1},
+        {"campaign_id": cid, "platform": "instagram", "ctr": 1.5},
+    ]
+    for payload in invalid_cases:
+        response = await client.post("/api/v1/n8n/analytics/ingest", json=payload)
+        assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_lead_and_sentiment_reject_missing_campaign(client):
+    lead = await client.post(
+        "/api/v1/leads/predict",
+        json={"campaign_id": "missing", "lead_identifier": "lead-1"},
+    )
+    assert lead.status_code == 404
+
+    sentiment = await client.post(
+        "/api/v1/sentiment/analyze",
+        json={"campaign_id": "missing", "texts": ["good"], "source_type": "ACTUAL"},
+    )
+    assert sentiment.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_brand_kit_routes_reject_missing_campaign(client):
+    for method, path in (
+        ("get", "/api/v1/brand-kit/missing"),
+        ("post", "/api/v1/brand-kit/missing/meta"),
+    ):
+        response = await getattr(client, method)(path)
+        assert response.status_code == 404
+
+
 # ── Analytics time series ─────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -368,6 +435,118 @@ async def test_analytics_timeseries(client):
     # Must never fabricate data — an empty DB returns an empty series.
     for p in points:
         assert {"date", "impressions", "clicks", "likes", "reach"} <= set(p)
+
+
+@pytest.mark.asyncio
+async def test_analytics_timeseries_provenance_aggregates_boolean_safely(client):
+    from sqlalchemy import select
+
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import AnalyticsEvent, Campaign
+
+    now = datetime.utcnow()
+    async with AsyncSessionLocal() as db:
+        campaigns = {
+            source_type: Campaign(
+                name=f"Analytics {source_type}",
+                product_name="Test product",
+                description="Database aggregation test",
+                offer="Test offer",
+                target_audience="Test audience",
+                campaign_goal="engagement",
+                preferred_platform="instagram",
+            )
+            for source_type in ("ACTUAL", "SIMULATED", "UNKNOWN", "MIXED")
+        }
+        db.add_all(campaigns.values())
+        await db.flush()
+        db.add_all(
+            [
+                AnalyticsEvent(
+                    campaign_id=campaigns["ACTUAL"].id,
+                    platform="instagram",
+                    event_date=now,
+                    impressions=10,
+                    clicks=2,
+                    likes=1,
+                    reach=8,
+                    is_mock=False,
+                    source_type="ACTUAL",
+                ),
+                AnalyticsEvent(
+                    campaign_id=campaigns["SIMULATED"].id,
+                    platform="instagram",
+                    event_date=now,
+                    impressions=10,
+                    clicks=2,
+                    likes=1,
+                    reach=8,
+                    is_mock=True,
+                    source_type="SIMULATED",
+                ),
+                AnalyticsEvent(
+                    campaign_id=campaigns["UNKNOWN"].id,
+                    platform="instagram",
+                    event_date=now,
+                    impressions=10,
+                    clicks=2,
+                    likes=1,
+                    reach=8,
+                    is_mock=False,
+                    source_type="UNKNOWN",
+                ),
+                AnalyticsEvent(
+                    campaign_id=campaigns["MIXED"].id,
+                    platform="instagram",
+                    event_date=now,
+                    impressions=10,
+                    clicks=2,
+                    likes=1,
+                    reach=8,
+                    is_mock=False,
+                    source_type="ACTUAL",
+                ),
+                AnalyticsEvent(
+                    campaign_id=campaigns["MIXED"].id,
+                    platform="instagram",
+                    event_date=now,
+                    impressions=10,
+                    clicks=2,
+                    likes=1,
+                    reach=8,
+                    is_mock=True,
+                    source_type="SIMULATED",
+                ),
+            ]
+        )
+        await db.commit()
+
+    for source_type, expected in (
+        ("ACTUAL", ("ACTUAL", False)),
+        ("SIMULATED", ("SIMULATED", True)),
+        ("UNKNOWN", ("UNKNOWN", False)),
+        ("MIXED", ("SIMULATED", True)),
+    ):
+        async with AsyncSessionLocal() as db:
+            campaign_id = (
+                await db.execute(
+                    select(Campaign.id).where(Campaign.name == f"Analytics {source_type}")
+                )
+            ).scalar_one()
+        response = await client.get(
+            f"/api/v1/analytics/engagement/timeseries?days=14&campaign_id={campaign_id}"
+        )
+        assert response.status_code == 200
+        point = response.json()[0]
+        assert (point["source_type"], point["is_mock"]) == expected
+
+    empty = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    empty_id = empty.json()["id"]
+    response = await client.get(
+        f"/api/v1/analytics/engagement/timeseries?days=14&campaign_id={empty_id}"
+    )
+    assert response.status_code == 200
+    assert response.json() == []
 
 
 @pytest.mark.asyncio
@@ -419,6 +598,66 @@ async def test_n8n_trigger_and_status(client):
     assert body["campaign_id"] == cid
     assert body["status"] in ("draft", "generating", "ready", "posted", "failed")
     assert isinstance(body["posts"], list)
+
+
+@pytest.mark.asyncio
+async def test_n8n_force_poster_creates_a_new_version(client, monkeypatch):
+    from sqlalchemy import select
+
+    from app.api.v1.endpoints import n8n_webhooks
+    from app.core.config import settings
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import Poster
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    campaign_id = cr.json()["id"]
+    async with AsyncSessionLocal() as db:
+        original = Poster(
+            campaign_id=campaign_id,
+            image_url="https://example.com/original.png",
+            provider="local-sdxl-designed",
+            variation_index=0,
+            version=2,
+        )
+        db.add(original)
+        await db.commit()
+        original_id = original.id
+
+    async def fake_active_runtime(_db):
+        return None, "C:/models/poster-lora.safetensors"
+
+    generated = {}
+
+    async def fake_generate(**kwargs):
+        generated.update(kwargs)
+        return {
+            "image_url": "https://example.com/refreshed.png",
+            "prompt_used": "refreshed prompt",
+            "provider": "local-sdxl-designed",
+            "variation_index": 0,
+            "metadata_": {"test": True},
+        }
+
+    monkeypatch.setattr(settings, "IMAGE_PROVIDER", "local")
+    monkeypatch.setattr(n8n_webhooks, "active_sdxl_runtime", fake_active_runtime)
+    monkeypatch.setattr(n8n_webhooks.poster_generator, "generate", fake_generate)
+
+    response = await client.post(
+        "/api/v1/n8n/trigger/campaign",
+        json={"campaign_id": campaign_id, "steps": ["poster"], "force_poster": True},
+    )
+    assert response.status_code == 200
+    assert generated["sdxl_model_version_id"] is None
+    assert generated["sdxl_lora_path"] == "C:/models/poster-lora.safetensors"
+
+    async with AsyncSessionLocal() as db:
+        posters = (await db.execute(
+            select(Poster).where(Poster.campaign_id == campaign_id).order_by(Poster.version)
+        )).scalars().all()
+    assert len(posters) == 2
+    assert posters[-1].version == 3
+    assert posters[-1].parent_poster_id == original_id
+    assert posters[-1].generation_reason == "pipeline_regeneration"
 
 
 @pytest.mark.asyncio
@@ -503,6 +742,49 @@ async def test_n8n_post_step_defaults_platforms_from_campaign(client):
         assert len(rows) == 1
         assert rows[0].platform == "instagram"
         assert rows[0].status == "posted"
+
+
+@pytest.mark.asyncio
+async def test_live_pipeline_only_targets_configured_platforms(client, monkeypatch):
+    from sqlalchemy import select
+
+    from app.core.config import settings
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import SocialPost
+    from app.services.posting import posting_service as ps
+    from app.services.posting.adapters import MockAdapter
+
+    monkeypatch.setattr(settings, "SOCIAL_MODE", "live")
+    monkeypatch.setattr(settings, "TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setattr(settings, "TELEGRAM_CHAT_ID", "test-chat")
+    monkeypatch.setattr(settings, "META_ACCESS_TOKEN", "")
+    monkeypatch.setattr(settings, "META_IG_USER_ID", "")
+    monkeypatch.setattr(settings, "META_PAGE_ID", "")
+    monkeypatch.setattr(settings, "WHATSAPP_ACCESS_TOKEN", "")
+    monkeypatch.setattr(settings, "WHATSAPP_PHONE_NUMBER_ID", "")
+    monkeypatch.setattr(settings, "WHATSAPP_RECIPIENT", "")
+    monkeypatch.setattr(ps, "_get_adapter", lambda platform: MockAdapter(platform))
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    campaign_id = cr.json()["id"]
+    response = await client.post(
+        "/api/v1/n8n/trigger/campaign",
+        json={"campaign_id": campaign_id, "steps": ["post"], "platforms": ["instagram", "telegram"]},
+    )
+    assert response.status_code == 200
+
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(
+            select(SocialPost).where(SocialPost.campaign_id == campaign_id)
+        )).scalars().all()
+    assert [row.platform for row in rows] == ["telegram"]
+
+    integrations = await client.get("/api/v1/posting/integrations/status")
+    assert integrations.status_code == 200
+    status = integrations.json()
+    assert status["telegram"]["configured"] is True
+    assert status["instagram"]["configured"] is False
+    assert status["instagram"]["healthy"] is False
 
 
 @pytest.mark.asyncio
@@ -734,8 +1016,8 @@ async def test_optimization_actual_reward_updates_bandit_and_links_event(client,
 
     calls = []
 
-    async def record_result(platform_name: str, clicked: bool):
-        calls.append((platform_name, clicked))
+    async def record_result(platform_name: str, clicked: bool, **kwargs):
+        calls.append((platform_name, clicked, kwargs))
 
     monkeypatch.setattr(optimization_endpoint.campaign_optimizer, "record_result", record_result)
     response = await client.post(f"/api/v1/optimize/{optimization_id}/reward")
@@ -745,7 +1027,14 @@ async def test_optimization_actual_reward_updates_bandit_and_links_event(client,
     assert data["reward_source"] == "ACTUAL"
     assert data["analytics_reference"] == f"analytics_event:{event_id}"
     assert data["bandit_updated"] is True
-    assert calls == [(platform, True)]
+    assert calls == [(
+        platform,
+        True,
+        {
+            "campaign_goal": "brand_awareness",
+            "target_audience": "remote workers and students",
+        },
+    )]
 
     async with AsyncSessionLocal() as db:
         row = (await db.execute(
@@ -801,6 +1090,46 @@ async def test_dashboard(client):
     data = r.json()
     assert "total_campaigns" in data
     assert "total_posts" in data
+    # Empty database: the AI Insights card must render its empty state, not a
+    # fabricated split.
+    assert data["sentiment_total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_dashboard_sentiment_counts(client):
+    """The AI Insights card reports the stored label split, so the dashboard
+    aggregation has to count persisted sentiment rows rather than always
+    returning zero."""
+    from app.db.session import AsyncSessionLocal
+    from app.models.models import SentimentResult
+
+    # sentiment_results.campaign_id is a real FK and the test connections run
+    # with PRAGMA foreign_keys=ON, so the campaign has to exist first.
+    created = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    campaign_id = created.json()["id"]
+
+    async with AsyncSessionLocal() as db:
+        for label, count in (("positive", 3), ("neutral", 1), ("negative", 2)):
+            for i in range(count):
+                db.add(SentimentResult(
+                    campaign_id=campaign_id,
+                    text=f"{label} comment {i}",
+                    label=label,
+                    positive_score=0.6,
+                    negative_score=0.1,
+                    neutral_score=0.3,
+                    confidence=0.8,
+                    model_used="distilbert",
+                ))
+        await db.commit()
+
+    r = await client.get("/api/v1/analytics/dashboard")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["sentiment_positive"] == 3
+    assert data["sentiment_neutral"] == 1
+    assert data["sentiment_negative"] == 2
+    assert data["sentiment_total"] == 6
 
 
 # ── Campaign Report (Workflow D) ────────────────────────────────────────────────
@@ -1089,6 +1418,30 @@ async def test_run_scheduled_posts(client):
     assert r.status_code == 200
     assert r.json()["status"] == "ok"
     assert isinstance(r.json()["published"], int)
+
+
+@pytest.mark.asyncio
+async def test_internal_posting_routes_require_n8n_access_once_configured(client, monkeypatch):
+    """/posting/scheduled/run and /posting/metrics/sync are n8n/worker-only —
+    once a real N8N_API_KEY is configured, unauthenticated calls must be
+    rejected rather than silently running real publish/sync side effects."""
+    from app.core import security
+
+    monkeypatch.setattr(security.settings, "N8N_API_KEY", "expected-n8n-key")
+
+    r = await client.post("/api/v1/posting/scheduled/run")
+    assert r.status_code == 401
+
+    cr = await client.post("/api/v1/campaigns/", json=CAMPAIGN_PAYLOAD)
+    cid = cr.json()["id"]
+    r = await client.post(f"/api/v1/posting/metrics/sync/{cid}")
+    assert r.status_code == 401
+
+    r = await client.post(
+        "/api/v1/posting/scheduled/run",
+        headers={"X-N8N-API-Key": "expected-n8n-key"},
+    )
+    assert r.status_code == 200
 
 
 def test_mock_metrics_are_deterministic():
@@ -1447,8 +1800,8 @@ def test_xgboost_training_eligibility_requires_actual_observed_labels():
     from ai.lead.xgboost_service import eligible_training_records
 
     records = [
-        {"source_type": "ACTUAL", "converted": 1},
-        {"source_type": "ACTUAL", "converted": 0},
+        {"source_type": "ACTUAL", "converted": True},
+        {"source_type": "ACTUAL", "converted": False},
         {"source_type": "SIMULATED", "converted": 1},
         {"source_type": "FALLBACK", "converted": 0},
         {"source_type": "UNKNOWN", "converted": 1},
@@ -1482,20 +1835,21 @@ def test_smoke_lstm_loads_and_forecasts():
         svc.unload()
 
 
-def test_smoke_thompson_sampling_bandit():
+@pytest.mark.asyncio
+async def test_smoke_thompson_sampling_bandit():
     """Pure CPU — no load/unload lifecycle, but still worth pinning."""
     from ai.optimization.bandit_service import BanditService
 
     svc = BanditService()
-    out = svc.select_arm(campaign_goal="sales", budget=500.0,
+    out = await svc.select_arm(campaign_goal="sales", budget=500.0,
                          target_audience="homeowners")
     assert out["recommended_platform"] in out["platform_scores"]
     assert 0.0 <= out["confidence"] <= 1.0
 
     # Reward feedback must actually move the arm's statistics.
-    before = svc.arm_stats()[out["recommended_platform"]]
-    svc.record_reward(out["recommended_platform"], clicked=True)
-    after = svc.arm_stats()[out["recommended_platform"]]
+    before = (await svc.arm_stats("sales", "homeowners"))[out["recommended_platform"]]
+    await svc.record_reward(out["recommended_platform"], clicked=True, campaign_goal="sales", target_audience="homeowners")
+    after = (await svc.arm_stats("sales", "homeowners"))[out["recommended_platform"]]
     assert after != before
 
 

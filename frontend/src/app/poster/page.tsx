@@ -140,15 +140,15 @@ export default function PosterGalleryPage() {
 
       {/* Controls */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 animate-fade-in-up">
-        <div className="flex flex-col md:flex-row gap-4 items-end">
-          <div className="flex-1 space-y-1.5 w-full">
+        <div className="grid grid-cols-1 md:grid-cols-[minmax(220px,1fr)_auto_minmax(180px,1fr)] gap-4 items-end">
+          <div className="min-w-0 space-y-1.5">
             <label htmlFor="poster-campaign" className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
               Campaign
             </label>
             <select
               id="poster-campaign"
               name="poster-campaign"
-              className="input-dark"
+              className="input-dark w-full min-w-0"
               value={selectedCampaign}
               onChange={(e) => setSelectedCampaign(e.target.value)}
             >
@@ -159,7 +159,7 @@ export default function PosterGalleryPage() {
           <button
             onClick={handleGenerate}
             disabled={generating || !selectedCampaign}
-            className="btn-brand px-6 py-2.5 rounded-xl font-semibold flex items-center justify-center gap-2 w-full md:w-auto"
+            className="btn-brand px-6 py-2.5 rounded-xl font-semibold flex items-center justify-center gap-2 w-full md:w-auto whitespace-nowrap"
           >
             {generating ? <Loader2 size={15} className="animate-spin" /> : <Zap size={15} />}
             Generate New Visual
@@ -169,7 +169,7 @@ export default function PosterGalleryPage() {
             name="poster-gallery-language"
             value={language}
             onChange={(e) => setLanguage(e.target.value)}
-            className="input-dark px-3 py-2.5 rounded-xl text-sm"
+            className="input-dark w-full min-w-0 px-3 py-2.5 rounded-xl text-sm"
             aria-label="Poster language"
           >
             {LANGUAGES.map((item) => <option key={item.code} value={item.code}>{item.label}</option>)}

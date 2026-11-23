@@ -569,6 +569,99 @@ class TelegramAdapter(SocialPlatformAdapter):
             unavailable=True,
         )
 
+    async def get_updates(self, offset: int | None = None, timeout_seconds: int = 20) -> list[dict]:
+        """Long-poll Telegram updates for replies to posts published by this bot."""
+        import json
+        import httpx
+
+        params = {
+            "timeout": timeout_seconds,
+            "allowed_updates": json.dumps([
+                "message", "edited_message", "channel_post", "edited_channel_post",
+                "message_reaction", "message_reaction_count",
+            ]),
+        }
+        if offset is not None:
+            params["offset"] = offset
+
+        async with httpx.AsyncClient(timeout=timeout_seconds + 5) as client:
+            response = await client.get(f"{self._base}/getUpdates", params=params)
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise RuntimeError("Telegram getUpdates returned invalid JSON") from exc
+        if response.status_code >= 400 or not body.get("ok"):
+            raise RuntimeError(str(body.get("description", "Telegram getUpdates failed")))
+        return body.get("result", [])
+
+    async def enable_long_polling(self) -> None:
+        """Disable webhook delivery without discarding queued updates."""
+        import httpx
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                f"{self._base}/deleteWebhook",
+                data={"drop_pending_updates": "false"},
+            )
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise RuntimeError("Telegram deleteWebhook returned invalid JSON") from exc
+        if response.status_code >= 400 or not body.get("ok"):
+            raise RuntimeError(str(body.get("description", "Telegram deleteWebhook failed")))
+
+    @staticmethod
+    def parse_update(update: dict) -> dict:
+        """Extract only fields Telegram exposes in an incoming update.
+
+        Telegram Bot API has no history endpoint for a bot to poll after the
+        fact. Channel/message updates are therefore the source of truth for
+        views, reactions, reply counts, and reply text.
+        """
+        message = (
+            update.get("message")
+            or update.get("channel_post")
+            or update.get("edited_message")
+            or update.get("edited_channel_post")
+        )
+        if message:
+            replies = message.get("replies") or {}
+            reactions = message.get("reactions") or {}
+            reaction_count = sum(
+                int(item.get("count", 0) or 0)
+                for item in reactions.get("results", [])
+            ) if reactions else None
+            reply_to = message.get("reply_to_message") or {}
+            return {
+                "kind": "comment" if reply_to.get("message_id") is not None and (message.get("text") or message.get("caption")) else "message",
+                "message_id": str(message.get("message_id")) if message.get("message_id") is not None else None,
+                "parent_message_id": str(reply_to.get("message_id")) if reply_to.get("message_id") is not None else None,
+                "chat_id": str((message.get("chat") or {}).get("id")) if (message.get("chat") or {}).get("id") is not None else None,
+                "text": message.get("text") or message.get("caption"),
+                "event_date": datetime.utcfromtimestamp(message["date"]) if message.get("date") else None,
+                "views": message.get("views"),
+                "reactions": reaction_count,
+                "replies": replies.get("replies") if replies else None,
+                "raw": update,
+            }
+
+        reaction_update = update.get("message_reaction") or update.get("message_reaction_count")
+        if reaction_update:
+            return {
+                "kind": "reaction",
+                "message_id": str(reaction_update.get("message_id")) if reaction_update.get("message_id") is not None else None,
+                "parent_message_id": None,
+                "chat_id": str((reaction_update.get("chat") or {}).get("id")) if (reaction_update.get("chat") or {}).get("id") is not None else None,
+                "text": None,
+                "event_date": None,
+                "views": None,
+                "reactions": None,
+                "replies": None,
+                "raw": update,
+            }
+
+        return {"kind": "unknown", "raw": update}
+
     async def health_check(self) -> bool:
         import httpx
 

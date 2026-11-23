@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
+from app.core.security import require_app_api_key
 from app.models.models import AnalyticsEvent, Campaign, EngagementForecast
 from app.schemas.schemas import ForecastRead, ForecastRequest
 from app.services.ai.lstm_forecast import lstm_forecast_service
@@ -16,7 +17,9 @@ router = APIRouter(prefix="/forecast", tags=["Engagement Forecasting"])
 
 @router.post("/", response_model=ForecastRead)
 async def create_forecast(
-    payload: ForecastRequest, db: AsyncSession = Depends(get_db)
+    payload: ForecastRequest,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
 ):
     campaign = await db.get(Campaign, payload.campaign_id)
     if not campaign:

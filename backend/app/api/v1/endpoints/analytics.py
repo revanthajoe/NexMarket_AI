@@ -19,6 +19,7 @@ from app.models.models import (
     Poster,
     PosterEvaluation,
     SentimentResult,
+    SocialComment,
     SocialPost,
 )
 from app.schemas.schemas import DashboardSummary
@@ -58,6 +59,17 @@ async def get_dashboard(db: AsyncSession = Depends(get_db)):
         )
     ).scalar() or 0
 
+    # Stored DistilBERT labels ("positive"/"negative"/"neutral") — the AI
+    # Insights card reports this split rather than inventing percentages.
+    sentiment_rows = (
+        await db.execute(
+            select(SentimentResult.label, func.count(SentimentResult.id))
+            .group_by(SentimentResult.label)
+        )
+    ).all()
+    stored = {str(label).lower(): int(count) for label, count in sentiment_rows}
+    by_label = {label: stored.get(label, 0) for label in ("positive", "neutral", "negative")}
+
     return DashboardSummary(
         total_campaigns=total_campaigns,
         active_campaigns=active_campaigns,
@@ -66,6 +78,10 @@ async def get_dashboard(db: AsyncSession = Depends(get_db)):
         avg_engagement_rate=avg_ctr,
         total_leads=total_leads,
         hot_leads=hot_leads,
+        sentiment_positive=by_label["positive"],
+        sentiment_neutral=by_label["neutral"],
+        sentiment_negative=by_label["negative"],
+        sentiment_total=sum(by_label.values()),
     )
 
 
@@ -101,7 +117,7 @@ async def get_engagement_timeseries(
             func.coalesce(func.sum(AnalyticsEvent.clicks), 0),
             func.coalesce(func.sum(AnalyticsEvent.likes), 0),
             func.coalesce(func.sum(AnalyticsEvent.reach), 0),
-            func.max(AnalyticsEvent.is_mock),
+            func.max(func.cast(AnalyticsEvent.is_mock, Integer)),
             func.max(func.cast(AnalyticsEvent.source_type == "SIMULATED", Integer)),
             func.max(func.cast(AnalyticsEvent.source_type == "UNKNOWN", Integer)),
         )
@@ -152,7 +168,7 @@ async def get_platform_breakdown(
             func.coalesce(func.sum(AnalyticsEvent.comments), 0),
             func.coalesce(func.sum(AnalyticsEvent.reach), 0),
             func.coalesce(func.sum(AnalyticsEvent.spend), 0.0),
-            func.max(AnalyticsEvent.is_mock),
+            func.max(func.cast(AnalyticsEvent.is_mock, Integer)),
             func.max(AnalyticsEvent.synced_at),
             func.max(func.cast(AnalyticsEvent.source_type == "SIMULATED", Integer)),
             func.max(func.cast(AnalyticsEvent.source_type == "UNKNOWN", Integer)),
@@ -247,11 +263,13 @@ async def get_campaign_analytics(campaign_id: str, db: AsyncSession = Depends(ge
         {
             "date": e.event_date.isoformat(),
             "platform": e.platform,
+            "social_post_id": e.social_post_id,
             "impressions": e.impressions,
             "clicks": e.clicks,
             "likes": e.likes,
             "shares": e.shares,
             "comments": e.comments,
+            "reactions": e.reactions,
             "reach": e.reach,
             "ctr": e.ctr,
             "spend": e.spend,
@@ -260,6 +278,39 @@ async def get_campaign_analytics(campaign_id: str, db: AsyncSession = Depends(ge
             "last_synced_at": e.synced_at.isoformat() if e.synced_at else None,
         }
         for e in events
+    ]
+
+
+@router.get("/campaign/{campaign_id}/comments", response_model=List[Dict[str, Any]])
+async def get_campaign_comments(campaign_id: str, db: AsyncSession = Depends(get_db)):
+    comments = (await db.execute(
+        select(SocialComment)
+        .where(SocialComment.campaign_id == campaign_id)
+        .order_by(SocialComment.comment_date.asc(), SocialComment.created_at.asc())
+    )).scalars().all()
+    sentiment_rows = (await db.execute(
+        select(SentimentResult).where(SentimentResult.social_comment_id.in_([c.id for c in comments]))
+    )).scalars().all() if comments else []
+    by_comment = {row.social_comment_id: row for row in sentiment_rows}
+    return [
+        {
+            "id": comment.id,
+            "campaign_id": comment.campaign_id,
+            "social_post_id": comment.social_post_id,
+            "text": comment.text,
+            "timestamp": comment.comment_date.isoformat() if comment.comment_date else None,
+            "source_type": comment.source_type,
+            "source_system": comment.source_system,
+            "sentiment": (
+                {
+                    "label": by_comment[comment.id].label,
+                    "source_type": by_comment[comment.id].source_type,
+                    "model_name": by_comment[comment.id].model_name,
+                }
+                if comment.id in by_comment else None
+            ),
+        }
+        for comment in comments
     ]
 
 
@@ -404,5 +455,4 @@ async def get_campaign_report(campaign_id: str, db: AsyncSession = Depends(get_d
             "reasoning": latest_optimization.reasoning,
         } if latest_optimization else None,
     }
-
 

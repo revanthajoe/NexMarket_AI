@@ -41,7 +41,7 @@ class LSTMForecastService:
                 horizon_days,
             )
             raise ValueError(
-                f"INSUFFICIENT_DATA: forecast requires at least 14 ACTUAL analytics rows; got {len(eligible_rows)}"
+                "INSUFFICIENT_DATA: Insufficient ACTUAL history — 14 observations required."
             )
         _validate_history(eligible_rows)
         history = _rows_to_array(eligible_rows)
@@ -69,7 +69,7 @@ def _rows_to_array(rows: list) -> np.ndarray:
 
     cols = ["likes", "shares", "comments", "ctr", "reach"]
     arr  = np.array(
-        [[row.get(c, 0) for c in cols] for row in rows],
+        [[row[c] for c in cols] for row in rows],
         dtype=np.float32,
     )
     return arr

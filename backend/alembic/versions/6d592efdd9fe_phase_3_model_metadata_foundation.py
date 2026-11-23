@@ -86,9 +86,28 @@ def upgrade() -> None:
     for table in ("poster_evaluations", "ad_copies", "lead_scores", "engagement_forecasts"):
         inspector = sa.inspect(bind)
         columns = {column["name"] for column in inspector.get_columns(table)}
-        foreign_keys = {fk["name"] for fk in inspector.get_foreign_keys(table)}
+        foreign_keys = {
+            fk["name"]
+            for fk in inspector.get_foreign_keys(table)
+            if fk["name"]
+        }
         constraint_name = f"fk_{table}_model_version_id"
-        if "model_version_id" not in columns or constraint_name not in foreign_keys:
+        if bind.dialect.name == "postgresql":
+            if "model_version_id" not in columns:
+                op.add_column(
+                    table,
+                    sa.Column("model_version_id", sa.String(36), nullable=True),
+                )
+            if constraint_name not in foreign_keys:
+                op.create_foreign_key(
+                    constraint_name,
+                    table,
+                    "model_versions",
+                    ["model_version_id"],
+                    ["id"],
+                    ondelete="SET NULL",
+                )
+        elif "model_version_id" not in columns or constraint_name not in foreign_keys:
             with op.batch_alter_table(table, recreate="always") as batch:
                 if "model_version_id" not in columns:
                     batch.add_column(sa.Column("model_version_id", sa.String(36), nullable=True))
@@ -104,9 +123,15 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     for table in ("poster_evaluations", "ad_copies", "lead_scores", "engagement_forecasts"):
-        with op.batch_alter_table(table, recreate="always") as batch:
-            batch.drop_constraint(f"fk_{table}_model_version_id", type_="foreignkey")
-            batch.drop_column("model_version_id")
+        if op.get_bind().dialect.name == "postgresql":
+            op.drop_constraint(
+                f"fk_{table}_model_version_id", table, type_="foreignkey"
+            )
+            op.drop_column(table, "model_version_id")
+        else:
+            with op.batch_alter_table(table, recreate="always") as batch:
+                batch.drop_constraint(f"fk_{table}_model_version_id", type_="foreignkey")
+                batch.drop_column("model_version_id")
     op.drop_table("model_validations")
     op.drop_table("training_runs")
     op.drop_table("training_datasets")

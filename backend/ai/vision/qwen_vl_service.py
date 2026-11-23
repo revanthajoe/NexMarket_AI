@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 _SPEC = get_spec("qwen_vl")
 _MAX_NEW_TOKENS = 1024
 
-# Default evaluation when vision inference fails or returns unparsable JSON
+# Synthetic evaluation used when vision inference cannot run at all: the
+# helper is unavailable, the call fails, or the model returns unparsable JSON.
+# It is always marked `fallback` so no consumer can mistake it for a real score.
 _FALLBACK_EVAL = {
     "overall_score": 72,
     "dimensions": {
@@ -130,7 +132,7 @@ class QwenVLService(BaseModelService):
             return self._run_vision(img_b64, mime, system_prompt, user_prompt)
         except Exception as exc:
             logger.error("qwen_vl evaluate failed: %s", exc)
-            return _FALLBACK_EVAL
+            return dict(_FALLBACK_EVAL)
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -157,28 +159,27 @@ class QwenVLService(BaseModelService):
             },
         ]
 
-        # Use qwen_vl_utils process_vision_info if available, else manual approach
         try:
             from qwen_vl_utils import process_vision_info
-            image_inputs, video_inputs = process_vision_info(messages)
-            text = self._processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            inputs = self._processor(
-                text          = [text],
-                images        = image_inputs,
-                videos        = video_inputs,
-                return_tensors = "pt",
-                padding       = True,
-            ).to(model_input_device(self._model))
         except ImportError:
-            # Fallback: manual text-only template (evaluation degrades gracefully)
-            text = self._processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            inputs = self._processor(
-                text=[text], return_tensors="pt", padding=True
-            ).to(model_input_device(self._model))
+            # Without qwen_vl_utils the image can never be prepared, so any
+            # generation would score a poster the model never saw — a number
+            # that reads as an evaluation but is grounded in nothing. Return the
+            # clearly-marked synthetic fallback rather than guessing.
+            logger.warning("qwen_vl qwen_vl_utils unavailable - returning fallback evaluation")
+            return dict(_FALLBACK_EVAL)
+
+        image_inputs, video_inputs = process_vision_info(messages)
+        text = self._processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = self._processor(
+            text          = [text],
+            images        = image_inputs,
+            videos        = video_inputs,
+            return_tensors = "pt",
+            padding       = True,
+        ).to(model_input_device(self._model))
 
         with torch.no_grad():
             output_ids = self._model.generate(
@@ -226,4 +227,6 @@ def _parse_json_eval(raw: str) -> dict:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         logger.warning("qwen_vl json_parse_failed raw_head=%s", raw[:120])
-        return _FALLBACK_EVAL
+        # A copy: callers may annotate the result, and mutating the module-level
+        # constant would leak those edits into every later fallback.
+        return dict(_FALLBACK_EVAL)

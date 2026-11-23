@@ -4,7 +4,8 @@ ai/lead/xgboost_service.py
 XGBoost lead scoring service.
 
 CPU-only. Does not occupy GPU memory.
-Auto-trains on synthetic data if no saved model exists.
+Requires a real trained model artifact on disk — raises if none exists
+rather than auto-training on synthetic data.
 
 Features (10):
   clicks, views, time_spent_seconds, prior_purchases, ctr,
@@ -150,6 +151,6 @@ def eligible_training_records(records: list[dict]) -> list[dict]:
         if record.get("source_type") != "ACTUAL":
             continue
         label = record.get("converted")
-        if isinstance(label, bool) or label in (0, 1):
+        if isinstance(label, bool):
             eligible.append(record)
     return eligible

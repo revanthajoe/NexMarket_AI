@@ -39,6 +39,7 @@ services:
       - DATABASE_URL=postgresql+asyncpg://nexmarket:nexmarket@postgres:5432/nexmarket_db
       - SYNC_DATABASE_URL=postgresql://nexmarket:nexmarket@postgres:5432/nexmarket_db
       - AI_TEXT_PROVIDER=${AI_TEXT_PROVIDER:-local}
+      - N8N_WEBHOOK_BASE=http://n8n:5678/webhook
       # Instagram/Facebook/WhatsApp fetch posted media server-side, so this
       # must be a publicly reachable URL (e.g. a domain in front of this
       # container, or an ngrok tunnel during testing) — a Docker-internal
@@ -57,12 +58,13 @@ services:
     environment:
       - N8N_BASIC_AUTH_ACTIVE=true
       - N8N_BASIC_AUTH_USER=admin
-      - N8N_BASIC_AUTH_PASSWORD=nexmarket123
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD:?Set N8N_BASIC_AUTH_PASSWORD in the environment}
       - N8N_HOST=localhost
       - N8N_PORT=5678
       - N8N_PROTOCOL=http
       - WEBHOOK_URL=http://localhost:5678
       - GENERIC_TIMEZONE=Asia/Kolkata
+      - NEXMARKET_BACKEND_URL=http://backend:8000
     volumes:
       - n8n_data:/home/node/.n8n
       - ../n8n/workflows:/home/node/.n8n/workflows:ro

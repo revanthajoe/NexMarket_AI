@@ -22,7 +22,7 @@ Usage (from any AI service file):
 
     async with model_manager.session("qwen_llm") as service:
         result = service.generate(...)
-    # model is unloaded here automatically
+    # the model stays loaded and is reused by the next session for this key
 """
 from __future__ import annotations
 
@@ -43,9 +43,9 @@ class ModelManager:
     """
     Singleton model lifecycle manager.
 
-    •  Acquires a global async lock before loading any model.
-    •  Unloads the currently active model before loading a new one.
-    •  Runs memory_manager.purge() after every session exits.
+    •  Serialises the load/unload transition under one async lock.
+    •  Keeps the resident model loaded and reuses it across sessions.
+    •  Unloads it only when a *different* model is requested.
     •  Provides health_check() for each registered model.
     •  Exposes a priority-aware request queue via session().
     """
@@ -68,9 +68,19 @@ class ModelManager:
     # ── Singleton init ────────────────────────────────────────────────────────
 
     def _setup(self) -> None:
-        self._gpu_lock: asyncio.Lock = asyncio.Lock()     # one model at a time
-        self._active_name: Optional[str] = None           # currently loaded model key
+        # Serialises load/unload only. It is never held while a model runs
+        # inference, so a slow generation no longer blocks every other AI call.
+        self._swap_lock: asyncio.Lock = asyncio.Lock()
+        self._idle: asyncio.Event = asyncio.Event()      # set when nobody uses the resident model
+        self._idle.set()
+        self._active_name: Optional[str] = None           # currently resident model key
+        self._active_users: int = 0                       # sessions using it right now
+        self._swapping: bool = False                      # a load/unload is in flight
         self._services: Dict[str, BaseModelService] = {}  # cached service instances
+        # One run at a time per model — a service's pipeline is not safe to drive
+        # from two threads at once. Per model, so it never serialises the whole
+        # system the way a global inference lock would.
+        self._model_locks: Dict[str, asyncio.Lock] = {}
         logger.info("ModelManager initialised")
 
     # ── Public async context manager ──────────────────────────────────────────
@@ -86,36 +96,75 @@ class ModelManager:
 
         async with model_manager.session("qwen_llm") as svc:
             result = svc.generate(...)
-        # model is unloaded + GPU memory purged on exit
 
-        The lock guarantees only one model occupies GPU at a time.
-        Priority is enforced by callers via asyncio.PriorityQueue if needed
-        (services are designed to be called sequentially by n8n pipeline).
+        The model stays loaded after the block exits and is reused by the next
+        session for the same key. It is only unloaded when a *different* model
+        is requested, because only one fits in GPU memory at a time — and the
+        swap lock is held for that transition alone, never during inference.
+
+        Concurrent sessions for the same key are serialised by a per-model lock
+        (the pipeline is shared mutable state); sessions for different keys are
+        ordered by the swap path, which waits for in-flight users before
+        freeing the model.
         """
-        spec = get_spec(model_key)
-
-        async with self._gpu_lock:
-            # 1. Unload whatever is currently in GPU (if different)
-            if self._active_name and self._active_name != model_key:
-                await self._unload(self._active_name)
-
-            # 2. Load the requested model
-            service = self._get_or_create(model_key)
-            if runtime_config and hasattr(service, "configure_runtime"):
-                service.configure_runtime(runtime_config)
-            if not service.is_loaded:
-                await self._load(model_key, service)
-
-            self._active_name = model_key
-            memory_manager.log_vram(f"after loading {model_key}")
-
-            try:
+        service = await self._acquire(model_key, runtime_config)
+        try:
+            async with self._model_locks.setdefault(model_key, asyncio.Lock()):
                 yield service
-            finally:
-                # 3. Always unload + purge after inference
-                await self._unload(model_key)
-                self._active_name = None
-                memory_manager.log_vram(f"after unloading {model_key}")
+        finally:
+            self._release()
+
+    async def _acquire(
+        self, model_key: str, runtime_config: Optional[dict] = None
+    ) -> BaseModelService:
+        """
+        Return the resident service for `model_key`, loading it if needed.
+
+        The fast path (model already resident, no swap underway) takes no lock.
+        Only the load/unload transition is serialised.
+        """
+        # No await between the check and the increment, so on the single event
+        # loop this is atomic against _release() and the swap path.
+        if self._active_name == model_key and not self._swapping:
+            self._active_users += 1
+            return self._services[model_key]
+
+        spec = get_spec(model_key)
+        async with self._swap_lock:
+            if self._active_name != model_key:
+                self._swapping = True
+                try:
+                    # In-flight inference has to finish before its model is freed.
+                    while self._active_users > 0:
+                        self._idle.clear()
+                        await self._idle.wait()
+
+                    if self._active_name:
+                        await self._unload(self._active_name)
+                        self._active_name = None
+
+                    service = self._get_or_create(model_key)
+                    if runtime_config and hasattr(service, "configure_runtime"):
+                        service.configure_runtime(runtime_config)
+                    if not service.is_loaded:
+                        logger.info(
+                            "model_manager load model=%s id=%s", model_key, spec.model_id
+                        )
+                        await self._load(model_key, service)
+
+                    self._active_name = model_key
+                    memory_manager.log_vram(f"after loading {model_key}")
+                finally:
+                    self._swapping = False
+
+            self._active_users += 1
+            return self._services[model_key]
+
+    def _release(self) -> None:
+        """Drop one user slot; the model itself is deliberately left resident."""
+        self._active_users = max(0, self._active_users - 1)
+        if self._active_users == 0:
+            self._idle.set()
 
     # ── Health check ──────────────────────────────────────────────────────────
 

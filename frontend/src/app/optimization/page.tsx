@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import { Loader2, Target, Zap } from "lucide-react";
 import { api, Campaign, Optimization } from "@/lib/api";
+import { ProvenanceBadge } from "@/components/ui/ProvenanceBadge";
 
 export default function OptimizationPage() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
@@ -25,7 +26,7 @@ export default function OptimizationPage() {
     try {
       const opt = await api.optimize.run(selectedCampaign, budget);
       setResult(opt);
-      toast.success("Strategy optimized successfully");
+      toast.success("Strategy recommendation generated");
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to run optimization");
     } finally {
@@ -101,8 +102,13 @@ export default function OptimizationPage() {
           ) : (
             <div className="space-y-5 animate-scale-up">
               <div className="text-xs uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full inline-block font-semibold">
-                {result.source_type || "UNKNOWN"} · {result.algorithm || "Thompson Sampling"}
+                <ProvenanceBadge value={result.source_type || "RECOMMENDATION"} /> · {result.algorithm || "Thompson Sampling"}
               </div>
+              {result.reward_source !== "ACTUAL" && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                  WAITING: recommendation only; an ACTUAL outcome is required before reward or learning updates.
+                </p>
+              )}
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
                   <div className="text-xs text-blue-600 uppercase tracking-wide mb-1.5 font-semibold">Best Platform</div>

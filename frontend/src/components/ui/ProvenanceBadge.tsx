@@ -10,7 +10,9 @@ export type Provenance =
   | "RECOMMENDATION"
   | "FALLBACK"
   | "UNKNOWN"
-  | "PENDING";
+  | "PENDING"
+  | "WAITING"
+  | "UNAVAILABLE";
 
 const styles: Record<Provenance, string> = {
   ACTUAL: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -21,6 +23,8 @@ const styles: Record<Provenance, string> = {
   FALLBACK: "bg-rose-50 text-rose-700 border-rose-200",
   UNKNOWN: "bg-slate-100 text-slate-600 border-slate-200",
   PENDING: "bg-yellow-50 text-yellow-800 border-yellow-200",
+  WAITING: "bg-yellow-50 text-yellow-800 border-yellow-200",
+  UNAVAILABLE: "bg-slate-100 text-slate-600 border-slate-200",
 };
 
 export function ProvenanceBadge({

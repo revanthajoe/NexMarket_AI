@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { Loader2, Target, MessageSquare, Activity, Users } from "lucide-react";
-import { api, Campaign, LeadScore, SentimentBatchResponse } from "@/lib/api";
+import { api, Campaign, IntegrationStatus, LeadScore, SentimentBatchResponse, SocialComment } from "@/lib/api";
+import { ProvenanceBadge } from "@/components/ui/ProvenanceBadge";
 
 export default function LeadsAndSentimentPage() {
   const [tab, setTab] = useState<"leads" | "sentiment">("leads");
@@ -48,8 +49,10 @@ export default function LeadsAndSentimentPage() {
 
 function LeadScoringSection() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [sourcePlatforms, setSourcePlatforms] = useState<string[]>(["telegram"]);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<LeadScore | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
 
   const [form, setForm] = useState({
     campaign_id: "",
@@ -66,6 +69,17 @@ function LeadScoringSection() {
 
   useEffect(() => {
     api.campaigns.list().then(setCampaigns).catch(() => {});
+    api.posting.integrationsStatus().then((integrations) => {
+      const available = Object.entries(integrations as Record<string, IntegrationStatus>)
+        .filter(([, integration]) => integration.mode === "mock" || integration.configured)
+        .map(([platform]) => platform);
+      if (available.length === 0) return;
+      setSourcePlatforms(available);
+      setForm((current) => ({
+        ...current,
+        source_platform: available.includes(current.source_platform) ? current.source_platform : available[0],
+      }));
+    }).catch(() => setSourcePlatforms(["other"]));
   }, []);
 
   useEffect(() => {
@@ -78,11 +92,14 @@ function LeadScoringSection() {
     e.preventDefault();
     if (!form.campaign_id) { toast.error("Please select a campaign"); return; }
     setLoading(true);
+    setUnavailable(false);
     try {
       const res = await api.leads.predict(form);
       setResult(res);
       toast.success("Lead scored successfully");
     } catch (err: unknown) {
+      setResult(null);
+      setUnavailable(true);
       toast.error(err instanceof Error ? err.message : "Failed to score lead");
     } finally {
       setLoading(false);
@@ -96,6 +113,11 @@ function LeadScoringSection() {
     warm: "text-amber-700 bg-amber-50 border-amber-200",
     cold: "text-blue-700 bg-blue-50 border-blue-200",
   };
+  const featureWeights = Object.entries(result?.feature_importance || {})
+    .map(([feature, value]) => [feature, Math.max(0, value)] as const)
+    .sort(([, first], [, second]) => second - first)
+    .slice(0, 5);
+  const totalFeatureWeight = featureWeights.reduce((total, [, value]) => total + value, 0);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -127,7 +149,6 @@ function LeadScoringSection() {
             ))}
 
             {[
-              { id: "lead-source", key: "source_platform", label: "Source", opts: ["instagram", "facebook", "linkedin", "twitter", "email", "direct"] },
               { id: "lead-device", key: "device", label: "Device", opts: ["mobile", "desktop", "tablet"] },
               { id: "lead-age", key: "age_group", label: "Age Group", opts: ["18-24", "25-34", "35-44", "45-54", "55+"] },
             ].map(({ id, key, label, opts }) => (
@@ -138,6 +159,13 @@ function LeadScoringSection() {
                 </select>
               </div>
             ))}
+
+            <div className="space-y-1">
+              <label htmlFor="lead-source" className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Source</label>
+              <select id="lead-source" name="lead-source" className="input-dark text-sm" value={form.source_platform} onChange={(e) => set("source_platform", e.target.value)}>
+                {sourcePlatforms.map((platform) => <option key={platform} value={platform}>{platform}</option>)}
+              </select>
+            </div>
 
             <div className="space-y-1">
               <label htmlFor="lead-location" className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Location Tier</label>
@@ -160,12 +188,12 @@ function LeadScoringSection() {
         {!result ? (
           <div className="h-48 flex flex-col items-center justify-center text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl gap-2">
             <Target size={24} className="text-slate-300" />
-            Submit metrics to view AI prediction
+            {unavailable ? "UNAVAILABLE: trained XGBoost model or eligible data is unavailable" : "Submit metrics to view AI prediction"}
           </div>
         ) : (
           <div className="space-y-5 animate-scale-up">
             <div className="text-xs uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full inline-block font-semibold">
-              {result.source_type || "UNKNOWN"}{result.is_fallback ? " · FALLBACK" : ""}
+              <ProvenanceBadge value={result.source_type} />
             </div>
 
             <div className="flex items-center gap-6">
@@ -203,20 +231,20 @@ function LeadScoringSection() {
               <div className="pt-4 border-t border-slate-100">
                 <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Feature Importance</h3>
                 <div className="space-y-2.5">
-                  {Object.entries(result.feature_importance)
-                    .sort(([, a], [, b]) => b - a)
-                    .slice(0, 5)
-                    .map(([feature, imp]) => (
+                  {featureWeights.map(([feature, imp]) => {
+                    const percentage = totalFeatureWeight ? (imp / totalFeatureWeight) * 100 : 0;
+                    return (
                       <div key={feature}>
                         <div className="flex justify-between text-sm mb-1.5">
                           <span className="text-slate-600 capitalize font-medium">{feature.replace(/_/g, " ")}</span>
-                          <span className="text-slate-400 font-mono text-xs">{(imp * 100).toFixed(1)}%</span>
+                          <span className="text-slate-400 font-mono text-xs">{percentage.toFixed(1)}%</span>
                         </div>
                         <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                          <div className="h-full bg-gradient-to-r from-violet-500 to-blue-400 rounded-full" style={{ width: `${imp * 100}%` }} />
+                          <div className="h-full bg-gradient-to-r from-violet-500 to-blue-400 rounded-full" style={{ width: `${percentage}%` }} />
                         </div>
                       </div>
-                    ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -228,21 +256,64 @@ function LeadScoringSection() {
 }
 
 function SentimentSection() {
-  const [texts, setTexts] = useState<string>(
-    "I absolutely love this product, it's amazing!\nThe service was terrible, never buying again.\nIt's okay, does the job well enough."
-  );
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [campaignId, setCampaignId] = useState("");
+  const [comments, setComments] = useState<SocialComment[]>([]);
+  const [manualText, setManualText] = useState("");
+  const manualEdited = useRef(false);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SentimentBatchResponse | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+
+  useEffect(() => {
+    api.campaigns.list().then((items) => {
+      setCampaigns(items);
+      if (items.length > 0) setCampaignId(items[0].id);
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    setResult(null);
+    setComments([]);
+    setManualText("");
+    manualEdited.current = false;
+    if (!campaignId) return;
+    let cancelled = false;
+    const loadComments = async () => {
+      try {
+        const fetched = await api.analytics.comments(campaignId);
+        if (!cancelled) {
+          const actualComments = fetched.filter((comment) => comment.source_type === "ACTUAL");
+          setComments(actualComments);
+          if (!manualEdited.current) setManualText(actualComments.map((comment) => comment.text).join("\n"));
+        }
+      } catch {
+        if (!cancelled) setComments([]);
+      }
+    };
+    void loadComments();
+    const interval = window.setInterval(loadComments, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [campaignId]);
 
   const handleAnalyze = async () => {
-    const inputTexts = texts.split("\n").map((t) => t.trim()).filter(Boolean);
+    const inputTexts = Array.from(new Set(manualText.split(/\r?\n/).map((text) => text.trim()).filter(Boolean)));
     if (!inputTexts.length) { toast.error("Please enter at least one sentence"); return; }
     setLoading(true);
+    setUnavailable(false);
     try {
-      const res = await api.sentiment.analyze(inputTexts);
+      const sourceSystem = manualEdited.current
+        ? comments.length ? "telegram_and_manual" : "manual_entry"
+        : "telegram_auto_sync";
+      const res = await api.sentiment.analyze(inputTexts, campaignId, sourceSystem);
       setResult(res);
       toast.success("Sentiment analyzed!");
     } catch (err: unknown) {
+      setResult(null);
+      setUnavailable(true);
       toast.error(err instanceof Error ? err.message : "Failed to analyze sentiment");
     } finally {
       setLoading(false);
@@ -254,18 +325,28 @@ function SentimentSection() {
       <div className="bg-white border border-slate-200 rounded-2xl p-6">
         <h2 className="text-base font-semibold text-slate-800 mb-4">Analyze Customer Feedback</h2>
         <div className="space-y-4">
+          <select className="input-dark" value={campaignId} onChange={(e) => setCampaignId(e.target.value)} aria-label="Campaign">
+            {campaigns.length === 0 && <option value="">No campaigns available</option>}
+            {campaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}
+          </select>
           <div className="space-y-1.5">
             <label htmlFor="sentiment-texts" className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
-              Feedback Texts (one per line)
+              Customer Comments
             </label>
             <textarea
               id="sentiment-texts"
               name="sentiment-texts"
               className="input-dark h-48 resize-none font-mono text-sm leading-relaxed"
-              value={texts}
-              onChange={(e) => setTexts(e.target.value)}
-              placeholder="Enter feedback comments here..."
+              value={manualText}
+              onChange={(event) => {
+                manualEdited.current = true;
+                setManualText(event.target.value);
+              }}
+              placeholder="Telegram replies are fetched automatically. Add or edit comments here, one per line."
             />
+            <p className="text-xs text-slate-500" role="status">
+              {comments.length} actual Telegram {comments.length === 1 ? "reply" : "replies"} synced for this campaign
+            </p>
           </div>
           <button onClick={handleAnalyze} disabled={loading}
             className="btn-brand w-full py-2.5 rounded-xl font-semibold flex justify-center items-center gap-2">
@@ -280,7 +361,9 @@ function SentimentSection() {
         {!result ? (
           <div className="h-48 flex flex-col items-center justify-center text-slate-400 text-sm border-2 border-dashed border-slate-200 rounded-xl gap-2">
             <MessageSquare size={24} className="text-slate-300" />
-            Run analysis to see model output
+            {unavailable
+              ? "UNAVAILABLE: DistilBERT sentiment model is unavailable"
+              : comments.length ? "Run analysis to see model output" : "WAITING: no eligible ACTUAL comments"}
           </div>
         ) : (
           <div className="space-y-5 animate-scale-up">
@@ -311,6 +394,7 @@ function SentimentSection() {
                     }`}>
                       {r.label} ({(r.confidence * 100).toFixed(1)}%)
                     </span>
+                    <ProvenanceBadge value={r.source_type} />
                     <span className="text-[10px] text-slate-400 font-mono hidden sm:inline">
                       Pos: {r.positive_score.toFixed(2)} | Neg: {r.negative_score.toFixed(2)}
                     </span>

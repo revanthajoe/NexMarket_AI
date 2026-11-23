@@ -464,6 +464,8 @@ Optimization context and reward synchronization use only `analytics_events.sourc
 
 The existing Thompson Sampling state is updated only after a valid ACTUAL event is found. Missing outcomes leave reward unavailable and do not update the bandit; repeated synchronization is idempotent through the persisted `bandit_updated` flag. Recommendations remain separate from observed analytics outcomes.
 
+Campaign-level ACTUAL analytics are aggregated by platform with an impression-weighted CTR and passed into the bandit decision path. The recommendation combines the contextual posterior draw with available observed campaign performance, so the endpoint no longer computes history that the optimizer discards. Reward synchronization also preserves the campaign goal and target-audience context when updating the matching bandit state.
+
 ### Migration
 
 Created and applied `7a1b2c3d4e5f_phase_8_optimization_rewards.py` from Phase 6 head `59cf09e73ad8`. It adds nullable reward storage and a persisted bandit-update flag to `optimization_results` while preserving existing records.
@@ -476,7 +478,6 @@ Created and applied `7a1b2c3d4e5f_phase_8_optimization_rewards.py` from Phase 6 
 
 ### Limitations
 
-- Bandit state remains in memory as in the existing implementation; this phase does not introduce state persistence or a closed-loop learning system.
 - Reward granularity remains the existing click/no-click signal because no broader observed conversion reward entity exists.
 - PostgreSQL live execution was not available in this environment; SQLite migration validation passed.
 
@@ -611,7 +612,7 @@ The existing n8n workflow orchestrates the backend through distinct REST calls r
 - Direct n8n analytics payloads cannot promote themselves to `ACTUAL`; requested ACTUAL input is classified as `SIMULATED` in mock mode and `UNKNOWN` otherwise. Real ACTUAL provenance is assigned by configured platform-adapter metric synchronization.
 - Analytics readiness counts `source_type=ACTUAL` specifically; UNKNOWN and simulated events do not unlock learning.
 - Existing Phase 9 gates remain authoritative: lead prediction and forecasting consume only eligible ACTUAL analytics, and reward synchronization consumes only matching ACTUAL outcomes.
-- The lead prediction logic no longer fabricates synthetic demographic defaults (	ime_spent_seconds, prior_purchases, device, etc.) when these are unavailable, ensuring only real signals enter the machine learning path.
+- The lead prediction logic no longer fabricates synthetic demographic defaults (time_spent_seconds, prior_purchases, device, etc.) when these are unavailable, ensuring only real signals enter the machine learning path.
 
 ### Failure Isolation
 Downstream failures such as analytics syncing or forecasting do not overwrite successful upstream state. A campaign that has reached `posted` retains that status during downstream-only retries, while successful analytics and other persisted outputs remain available independently.
@@ -635,6 +636,73 @@ Downstream failures such as analytics syncing or forecasting do not overwrite su
 - No large execution-history subsystem was introduced; `campaign_id` and optional n8n execution ID provide lightweight traceability.
 
 No Phase 12 work was started.
+
+## Phase 14 - Telegram Real Analytics and Sentiment Ingestion
+Status: Implemented with Telegram Bot API limitations
+
+### Root cause
+
+Telegram publishing already persisted the Bot API `message_id` in
+`social_posts.platform_post_id`. The broken path was after publishing:
+`TelegramAdapter.fetch_metrics()` correctly refused to invent metrics, but
+there was no Telegram update ingestion endpoint, no persisted comment entity,
+and no mapping from a reply's `reply_to_message.message_id` back to the
+campaign's social post. Consequently, replies, reactions, and comment text
+never reached analytics or sentiment.
+
+### Implemented flow
+
+`POST /api/v1/posting/telegram/webhook` accepts Bot API updates. Message or
+channel-post updates are matched by the exact persisted Telegram message ID
+and, when available, the stored chat ID in the publish response. Actual reply
+text is stored in `social_comments` with both `campaign_id` and
+`social_post_id`, and duplicate updates are idempotent.
+
+When Telegram includes them in a message update, views, reaction totals, and
+reply counts are stored as `ACTUAL` analytics. Clicks, likes, shares, reach,
+CTR, and spend remain `NULL` because Telegram does not provide those values
+through this Bot API path. Reaction-only updates without an aggregate count
+are not converted into a fabricated total.
+
+Actual comment text is sent to the existing DistilBERT sentiment service. A
+successful model result is stored as `PREDICTED` with `input_source_type=ACTUAL`
+and linked to the source comment. Keyword fallback output is not persisted as
+predicted sentiment. Mock posts are rejected by the ingestion path and cannot
+enter actual analytics, comments, sentiment, or the learning path.
+
+### Telegram availability boundary
+
+The Bot API does not provide a general historical message-analytics endpoint
+for ordinary bot-sent messages. This implementation therefore depends on
+Telegram webhook or update delivery while the bot has the required access to
+the chat/channel. Existing posts cannot be backfilled retrospectively unless
+Telegram delivers a corresponding update containing the data.
+
+### Migration and validation
+
+Migration `9c3d4e5f6a7b_phase_14_telegram_analytics.py` adds the
+`social_comments` table, comment-to-post provenance, nullable analytics values,
+reaction storage, and sentiment-to-comment linkage. The campaign detail view
+shows Telegram views, reactions, replies, unavailable metrics, actual recent
+comments, and predicted DistilBERT sentiment without fabricating values.
+
+Focused Phase 14 tests cover message-ID persistence and mapping, actual
+analytics, nullable metrics, comments, reactions, provenance, sentiment, mock
+isolation, and campaign association.
+
+### Limitations
+
+- Live Telegram webhook registration and external Telegram E2E execution were
+not performed in this environment.
+- Reaction totals are available only when Telegram includes an aggregate
+`message.reactions.results` payload; a reaction update alone does not provide
+a safe aggregate count.
+- The Bot API does not expose clicks, likes, shares, reach, CTR, or spend for
+this path, so those fields intentionally remain unavailable.
+- The existing learning services are unchanged and continue to require
+`ACTUAL` analytics; simulated events never unlock them.
+
+No Phase 15 work was started.
 
 ## Phase 12 - Frontend / Dashboard
 Status: Completed
@@ -783,3 +851,16 @@ None.
 ## Phase 14: Frontend UI/UX Redesign
 - **Result:** COMPLETE
 - **Details:** Resolved Tailwind/CSS variable conflict causing dark/light mode inconsistency. Replaced transparent 89-byte mock posters with clear placeholder cards. Overhauled sidebar, dashboard, analytics, and campaign pages with a cohesive light theme. Implemented per-stage progress feedback for the N8N pipeline to clearly communicate status instead of a generic loading spinner. Removed expensive global CSS ambient blur filters to drastically improve rendering performance. Preserved all backend FastAPI/ML systems with 105 tests passing intact.
+## Phase 17: Real n8n Integration
+- **Result:** COMPLETE
+- **Details:** Reconfigured n8n integration to act as a true orchestrator. The frontend trigger endpoint now acts as a handoff router, forwarding execution to N8N_WEBHOOK_BASE if available, and gracefully falling back to local  un_pipeline orchestration if n8n is unreachable. Docker compose was updated to enable bidirectional communication: NEXMARKET_BACKEND_URL for n8n to call the backend, and N8N_WEBHOOK_BASE for the backend to handoff to n8n. Idempotency is preserved across retries. All correlation IDs (e.g., execution_id) correctly survive the boundary pass.
+## Phase 18: Persistent Campaign Optimization
+- **Result:** COMPLETE
+- **Details:** The Thompson Sampling bandit state is now properly persisted using PostgreSQL via a new BanditState SQLAlchemy model. This guarantees that alpha and beta probability distributions per arm and context (campaign_goal / target_audience) survive backend restarts. The optimization and feedback loops in inference_manager and
+8n_webhooks were converted to async calls that persist ACTUAL rewards directly to the database. Idempotent reward logging via OptimizationResult.bandit_updated guarantees that learning events are recorded exactly once per post.
+## Phase 19: Durable Execution and Failure Recovery
+- **Result:** COMPLETE
+- **Details:** The orchestrator execution (both in FastAPI's background task and n8n) is a fully idempotent state machine. If an execution aborts mid-flight, a subsequent trigger resumes precisely where the failure occurred without duplicating heavy generation work, duplicating social posts, or fabricating double learning feedback. The state is strictly durable via PostgreSQL persistence at the boundary of each pipeline action (Generation, Evaluation, Publishing, Syncing).
+## Phase 20: Live Social Publishing Safety
+- **Result:** COMPLETE
+- **Details:** Explicit MOCK vs LIVE isolation is strictly enforced via SOCIAL_MODE in backend settings. In LIVE mode, the platform adapter completely prohibits silent fallbacks to mocks: missing credentials or platform connectivity failures immediately result in an explicit error, causing the pipeline step to fail gracefully and truthfully rather than fabricating posts. All posts strictly persist is_mock state to PostgreSQL, and the frontend campaign UI now explicitly labels both MOCK and LIVE posts with distinct high-contrast badges to prevent operator confusion.

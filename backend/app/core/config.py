@@ -9,6 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,7 +23,10 @@ class Settings(BaseSettings):
     # ── App ──────────────────────────────────────────────────────
     APP_ENV: Literal["development", "staging", "production"] = "development"
     LOG_LEVEL: str = "INFO"
-    CORS_ORIGINS: str = "http://localhost:3000"
+    CORS_ORIGINS: str = (
+        "http://localhost:3000,http://127.0.0.1:3000,"
+        "http://localhost:3010,http://127.0.0.1:3010"
+    )
 
     @property
     def cors_origins_list(self) -> List[str]:
@@ -36,7 +40,9 @@ class Settings(BaseSettings):
     # ── Database ──────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql+asyncpg://nexmarket:nexmarket@localhost:5432/nexmarket_db"
     SYNC_DATABASE_URL: str = "postgresql://nexmarket:nexmarket@localhost:5432/nexmarket_db"
-    USE_SQLITE_FALLBACK: bool = True
+    # PostgreSQL is never silently replaced by SQLite. Opt in explicitly for
+    # local SQLite-only development or tests.
+    USE_SQLITE_FALLBACK: bool = False
     SQLITE_DB_PATH: str = "./nexmarket.db"
 
     def _sqlite_path(self) -> str:
@@ -97,6 +103,7 @@ class Settings(BaseSettings):
     # its adapter uploads the poster bytes directly (see _resolve_local_media).
     TELEGRAM_BOT_TOKEN: str = ""
     TELEGRAM_CHAT_ID: str = ""
+    TELEGRAM_POLL_TIMEOUT_SECONDS: int = 20
 
     # WhatsApp Business Cloud API. Business message distribution, not broadcast
     # publishing: every send targets one recipient number.
@@ -128,6 +135,17 @@ class Settings(BaseSettings):
     # ── n8n ───────────────────────────────────────────────────────
     N8N_WEBHOOK_BASE: str = "http://localhost:5678/webhook"
     N8N_API_KEY: str = ""
+    TELEGRAM_WEBHOOK_SECRET: str = ""
+    ALLOW_INSECURE_WEBHOOKS: bool = False
+
+    # ── Public API perimeter ─────────────────────────────────────
+    # Shared secret the frontend attaches to expensive/mutating calls
+    # (poster generation, publishing, campaign writes, ...). This is a
+    # perimeter control, not per-user auth: there is no user/tenant model,
+    # and the key ships in the frontend's built JS bundle like any
+    # NEXT_PUBLIC_* value, so it stops naive/automated abuse of a publicly
+    # reachable deployment, not a targeted attacker inspecting traffic.
+    APP_API_KEY: str = ""
 
     # ── Storage ───────────────────────────────────────────────────
     STORAGE_BACKEND: Literal["local", "s3"] = "local"
@@ -141,6 +159,29 @@ class Settings(BaseSettings):
     LSTM_MODEL_PATH: str = "./ml/lstm/engagement_lstm.pt"
     XGBOOST_MODEL_PATH: str = "./ml/xgboost_model/lead_model.json"
     SENTIMENT_MODEL: str = "distilbert-base-uncased-finetuned-sst-2-english"
+
+    @model_validator(mode="after")
+    def validate_deployment_security(self) -> "Settings":
+        if self.APP_ENV in {"staging", "production"}:
+            placeholders = {
+                "",
+                "insecure-dev-key-change-me",
+                "your-secret-key-change-me-in-production",
+                "change-me",
+            }
+            if self.SECRET_KEY in placeholders or len(self.SECRET_KEY) < 32:
+                raise ValueError("SECRET_KEY must be a strong configured secret outside development")
+            if not self.N8N_API_KEY or len(self.N8N_API_KEY) < 32:
+                raise ValueError("N8N_API_KEY must be configured outside development")
+            if not self.TELEGRAM_WEBHOOK_SECRET or len(self.TELEGRAM_WEBHOOK_SECRET) < 16:
+                raise ValueError("TELEGRAM_WEBHOOK_SECRET must be configured outside development")
+            if not self.APP_API_KEY or len(self.APP_API_KEY) < 32:
+                raise ValueError("APP_API_KEY must be configured outside development")
+            if self.ALLOW_INSECURE_WEBHOOKS:
+                raise ValueError("ALLOW_INSECURE_WEBHOOKS cannot be enabled outside development")
+            if self.USE_SQLITE_FALLBACK:
+                raise ValueError("USE_SQLITE_FALLBACK must be disabled outside development")
+        return self
 
     @property
     def is_demo(self) -> bool:

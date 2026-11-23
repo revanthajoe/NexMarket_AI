@@ -6,6 +6,7 @@ import { Loader2, TrendingUp, BarChart3, Activity, RefreshCw, AlertTriangle } fr
 import { api, invalidateCache, Campaign, Forecast, PlatformBreakdown, TrackingStatus } from "@/lib/api";
 import dynamic from "next/dynamic";
 import { DashboardStats } from "@/components/dashboard/DashboardStats";
+import { ProvenanceBadge } from "@/components/ui/ProvenanceBadge";
 
 const ForecastLineChart = dynamic(
   () => import("@/components/charts/ForecastLineChart").then((m) => m.ForecastLineChart),
@@ -36,6 +37,8 @@ export default function AnalyticsPage() {
   const [forecastCampaign, setForecastCampaign] = useState<string>("");
   const [days, setDays] = useState(14);
   const [forecast, setForecast] = useState<Forecast | null>(null);
+  const [forecastState, setForecastState] = useState<string | null>(null);
+  const [forecastActualCount, setForecastActualCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [platforms, setPlatforms] = useState<PlatformBreakdown[] | null>(null);
@@ -49,6 +52,27 @@ export default function AnalyticsPage() {
     }).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (!forecastCampaign) {
+      setForecastActualCount(0);
+      return;
+    }
+    let cancelled = false;
+    setForecastActualCount(0);
+    api.analytics.trackingStatus(forecastCampaign).then((status) => {
+      if (cancelled) return;
+      const count = status.actual_event_count || 0;
+      setForecastActualCount(count);
+      setForecastState(count < 14 ? `Insufficient ACTUAL history — ${count}/14 observations.` : null);
+    }).catch(() => {
+      if (!cancelled) {
+        setForecastActualCount(0);
+        setForecastState("Unable to check ACTUAL history.");
+      }
+    });
+    return () => { cancelled = true; };
+  }, [forecastCampaign, refreshKey]);
+
   const loadTracking = useCallback(() => {
     const scope = selectedCampaign || undefined;
     setPlatforms(null);
@@ -61,12 +85,18 @@ export default function AnalyticsPage() {
   const runForecast = async () => {
     if (!forecastCampaign) return;
     setLoading(true);
+    setForecastState(null);
     try {
       const f = await api.forecast.create(forecastCampaign, 14);
       setForecast(f);
       toast.success("Forecast generated!");
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to generate forecast");
+      setForecast(null);
+      const message = err instanceof Error ? err.message : "";
+      setForecastState(message.includes("Insufficient ACTUAL history")
+        ? "Insufficient ACTUAL history — 14 observations required."
+        : "UNAVAILABLE: LSTM forecast model is unavailable");
+      toast.error(message || "Failed to generate forecast");
     } finally {
       setLoading(false);
     }
@@ -222,7 +252,8 @@ export default function AnalyticsPage() {
             </select>
             <button
               onClick={runForecast}
-              disabled={loading || !forecastCampaign}
+              disabled={loading || !forecastCampaign || forecastActualCount < 14}
+              title={forecastActualCount < 14 ? "Forecasting requires 14 actual observations" : "Run forecast"}
               className="btn-brand px-4 py-2 rounded-xl font-semibold flex items-center gap-2 whitespace-nowrap"
             >
               {loading ? <Loader2 size={14} className="animate-spin" /> : <TrendingUp size={14} />}
@@ -235,7 +266,7 @@ export default function AnalyticsPage() {
               <ForecastLineChart forecast={forecast} />
               <div className="flex justify-between items-center text-xs text-slate-400 pt-2 border-t border-slate-100">
                 <span className="font-mono">
-                  {forecast.model_version} · {forecast.source_type || "UNKNOWN"} · history: {forecast.history_source || "UNKNOWN"}
+                  {forecast.model_version} · <ProvenanceBadge value={forecast.source_type} /> · history: {forecast.history_source || "UNKNOWN"}
                 </span>
                 <span className="bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full font-medium">
                   {forecast.forecast_horizon_days}d horizon
@@ -246,7 +277,7 @@ export default function AnalyticsPage() {
             <div className="h-[240px] flex flex-col items-center justify-center text-slate-400 text-sm
                             border-2 border-dashed border-slate-200 rounded-xl">
               <TrendingUp size={24} className="text-slate-300 mb-2" />
-              <p>Select a campaign and run forecast</p>
+              <p>{forecastState || "WAITING: select a campaign and run forecast"}</p>
               <p className="text-xs text-slate-300 mt-1">Requires ≥14 ACTUAL observations</p>
             </div>
           )}

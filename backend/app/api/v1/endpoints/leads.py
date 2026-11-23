@@ -1,11 +1,12 @@
 """Lead scoring endpoint."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.models.models import LeadScore
+from app.core.security import require_app_api_key
+from app.models.models import Campaign, LeadScore
 from app.schemas.schemas import LeadScoreRead, LeadScoreRequest
 from app.services.ai.lead_prediction import lead_prediction_service
 from app.services.model_metadata import active_model_version_id
@@ -15,9 +16,17 @@ router = APIRouter(prefix="/leads", tags=["Lead Scoring"])
 
 @router.post("/predict", response_model=LeadScoreRead)
 async def predict_lead(
-    payload: LeadScoreRequest, db: AsyncSession = Depends(get_db)
+    payload: LeadScoreRequest,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
 ):
-    result = await lead_prediction_service.predict(**payload.model_dump())
+    campaign = await db.get(Campaign, payload.campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    try:
+        result = await lead_prediction_service.predict(**payload.model_dump())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     model_version_id = None
     if result.get("source_type") == "PREDICTED":

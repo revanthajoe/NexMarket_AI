@@ -44,8 +44,8 @@ class LeadPredictionService:
             })
             return result
         except Exception as exc:
-            logger.warning("lead_predict_fallback error=%s", exc)
-            return _heuristic(clicks, views, time_spent_seconds, prior_purchases)
+            logger.warning("lead_predict_unavailable error=%s", exc)
+            raise RuntimeError("UNAVAILABLE: trained XGBoost lead model is unavailable") from exc
 
 
 def _heuristic(clicks, views, time_spent, purchases) -> dict:

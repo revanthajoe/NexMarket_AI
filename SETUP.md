@@ -1,7 +1,7 @@
 # 🚀 NexMarket AI — Development Setup Guide
 
 ## Current Status
-✅ Backend running on `http://localhost:8002`  
+✅ Backend running on `http://localhost:8000`
 ✅ Frontend running on `http://localhost:3000`  
 ✅ All dependencies installed  
 
@@ -9,7 +9,7 @@
 1. ✅ Fixed `optimization_service` import issues
 2. ✅ Fixed Pydantic v2 protected namespace warnings
 3. ✅ Fixed structlog configuration  
-4. ✅ Updated frontend API URL from :8000 → :8002
+4. ✅ Standardized the frontend/backend API URL to :8000
 5. ✅ Added favicon.svg
 6. ✅ Created .gitignore files for all folders
 
@@ -61,8 +61,14 @@ LLM_PROVIDER=openai
 
 Frontend `.env.local` already created with:
 ```env
-NEXT_PUBLIC_API_URL=http://localhost:8002/api/v1
+NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
 ```
+
+For staging/production, set strong values for `SECRET_KEY`, `N8N_API_KEY`, and
+`TELEGRAM_WEBHOOK_SECRET`. The backend rejects placeholder or missing values
+outside development. Development may leave webhook keys empty; privileged
+webhook requests are then intentionally available only on a local development
+instance.
 
 ---
 
@@ -71,7 +77,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8002/api/v1
 ### Terminal 1 - Backend
 ```bash
 cd backend
-python -m uvicorn app.main:app --port 8002
+python -m uvicorn app.main:app --port 8000
 ```
 
 ### Terminal 2 - Frontend
@@ -82,8 +88,8 @@ npm run dev
 
 ### Access Points
 - 🌐 **Frontend**: http://localhost:3000
-- 📚 **API Docs**: http://localhost:8002/docs
-- 💚 **API Health**: http://localhost:8002/health
+- 📚 **API Docs**: http://localhost:8000/docs
+- 💚 **API Health**: http://localhost:8000/health
 
 ---
 
@@ -93,7 +99,7 @@ npm run dev
 **Solution**: Backend isn't running or database isn't connected
 1. Ensure PostgreSQL is running
 2. Run `alembic upgrade head` to create tables
-3. Restart backend: `python -m uvicorn app.main:app --port 8002`
+3. Restart backend: `python -m uvicorn app.main:app --port 8000`
 
 ### "404 Not Found" on favicon
 **Solution**: Already fixed! Frontend now has `/public/favicon.svg`
@@ -111,7 +117,7 @@ npm run dev
 ---
 
 ## Key Files Changed
-- [api.ts](frontend/src/lib/api.ts) — Updated API URL to :8002
+- [api.ts](frontend/src/lib/api.ts) — Standardized API URL to :8000
 - [layout.tsx](frontend/src/app/layout.tsx) — Added favicon config
 - [logging.py](backend/app/core/logging.py) — Fixed structlog factory
 - [optimizer.py](backend/app/services/optimization/optimizer.py) — Exported `campaign_optimizer`
@@ -140,10 +146,10 @@ npm run dev
 ### API Testing
 ```bash
 # Test backend health
-curl http://localhost:8002/health
+curl http://localhost:8000/health
 
 # Create campaign (requires DB)
-curl -X POST http://localhost:8002/api/v1/campaigns/ \
+curl -X POST http://localhost:8000/api/v1/campaigns/ \
   -H "Content-Type: application/json" \
   -d '{
     "name": "Test",
@@ -173,7 +179,7 @@ curl -X POST http://localhost:8002/api/v1/campaigns/ \
 | Service | Port | URL |
 |---------|------|-----|
 | Frontend | 3000 | http://localhost:3000 |
-| Backend API | 8002 | http://localhost:8002 |
+| Backend API | 8000 | http://localhost:8000 |
 | PostgreSQL | 5432 | localhost:5432 |
 | n8n (optional) | 5678 | http://localhost:5678 |
 

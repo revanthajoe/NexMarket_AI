@@ -1,11 +1,12 @@
 """Sentiment analysis endpoint."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
-from app.models.models import SentimentResult
+from app.core.security import require_app_api_key
+from app.models.models import Campaign, SentimentResult
 from app.schemas.schemas import SentimentBatchResponse, SentimentRequest
 from app.services.ai.sentiment import sentiment_service
 from app.services.model_metadata import active_model_version_id
@@ -15,15 +16,28 @@ router = APIRouter(prefix="/sentiment", tags=["Sentiment"])
 
 @router.post("/analyze", response_model=SentimentBatchResponse)
 async def analyze_sentiment(
-    payload: SentimentRequest, db: AsyncSession = Depends(get_db)
+    payload: SentimentRequest,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
 ):
-    analysis = await sentiment_service.analyze(
-        payload.texts,
-        payload.campaign_id,
-        payload.source_type,
-        payload.source_system,
-        payload.source_reference,
-    )
+    if payload.campaign_id is not None:
+        campaign = await db.get(Campaign, payload.campaign_id)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+    if payload.source_type != "ACTUAL":
+        raise HTTPException(status_code=422, detail="Sentiment requires ACTUAL input text")
+    try:
+        analysis = await sentiment_service.analyze(
+            payload.texts,
+            payload.campaign_id,
+            payload.source_type,
+            payload.source_system,
+            payload.source_reference,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     results = analysis["results"]
     summary = analysis["summary"]
 

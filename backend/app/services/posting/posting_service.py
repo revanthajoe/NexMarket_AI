@@ -13,7 +13,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.models.models import AdCopy, AnalyticsEvent, Campaign, Poster, PostLog, SocialPost
+from app.models.models import (
+    AdCopy,
+    AnalyticsEvent,
+    Campaign,
+    Poster,
+    PostLog,
+    SentimentResult,
+    SocialComment,
+    SocialPost,
+)
 from app.services.posting.adapters import (
     FacebookAdapter,
     InstagramAdapter,
@@ -53,33 +62,33 @@ def _credentials_present(platform: str) -> bool:
     return False
 
 
+def available_platforms() -> list[str]:
+    """Return publish targets usable in the current live or mock mode."""
+    if settings.SOCIAL_MODE != "live":
+        return list(SUPPORTED_PLATFORMS)
+    return [platform for platform in SUPPORTED_PLATFORMS if _credentials_present(platform)]
+
+
 def _get_adapter(platform: str) -> SocialPlatformAdapter:
     """Factory: returns live or mock adapter based on settings and credentials."""
-    if settings.SOCIAL_MODE == "mock":
-        return MockAdapter(platform)
+    if settings.SOCIAL_MODE == "live":
+        if not _credentials_present(platform):
+            raise RuntimeError(f"LIVE mode enabled but credentials missing for platform '{platform}'. Silent fallback to mock is prohibited.")
+        if platform == "instagram":
+            return InstagramAdapter(settings.META_ACCESS_TOKEN, settings.META_IG_USER_ID)
+        if platform == "facebook":
+            return FacebookAdapter(settings.META_ACCESS_TOKEN, settings.META_PAGE_ID)
+        if platform == "telegram":
+            return TelegramAdapter(settings.TELEGRAM_BOT_TOKEN, settings.TELEGRAM_CHAT_ID)
+        if platform == "whatsapp":
+            return WhatsAppAdapter(
+                settings.WHATSAPP_ACCESS_TOKEN,
+                settings.WHATSAPP_PHONE_NUMBER_ID,
+                settings.WHATSAPP_RECIPIENT,
+            )
+        raise RuntimeError(f"LIVE mode enabled but platform '{platform}' is unsupported.")
 
-    if not _credentials_present(platform):
-        # Fallback to mock if credentials missing
-        logger.warning("social_credentials_missing_fallback_mock", platform=platform)
-        return MockAdapter(platform)
-
-    if platform == "instagram":
-        return InstagramAdapter(settings.META_ACCESS_TOKEN, settings.META_IG_USER_ID)
-
-    if platform == "facebook":
-        return FacebookAdapter(settings.META_ACCESS_TOKEN, settings.META_PAGE_ID)
-
-    if platform == "telegram":
-        return TelegramAdapter(settings.TELEGRAM_BOT_TOKEN, settings.TELEGRAM_CHAT_ID)
-
-    if platform == "whatsapp":
-        return WhatsAppAdapter(
-            settings.WHATSAPP_ACCESS_TOKEN,
-            settings.WHATSAPP_PHONE_NUMBER_ID,
-            settings.WHATSAPP_RECIPIENT,
-        )
-
-    logger.warning("social_platform_unsupported_fallback_mock", platform=platform)
+    # In mock mode, always use MockAdapter
     return MockAdapter(platform)
 
 
@@ -110,6 +119,30 @@ class SocialPostingService:
     Manages the full lifecycle of a social post:
     immediate posting, scheduling, retries, and audit logging.
     """
+
+    async def fail_unavailable_live_posts(self, db: AsyncSession) -> int:
+        """Fail queued rows for live platforms that have no configured credentials."""
+        if settings.SOCIAL_MODE != "live":
+            return 0
+
+        configured = set(available_platforms())
+        unavailable = set(SUPPORTED_PLATFORMS) - configured
+        if not unavailable:
+            return 0
+
+        rows = (await db.execute(
+            select(SocialPost)
+            .where(SocialPost.platform.in_(unavailable))
+            .where(SocialPost.status.in_(("pending", "posting", "scheduled")))
+        )).scalars().all()
+        for row in rows:
+            row.status = "failed"
+            row.error_message = f"Skipped: {row.platform} is not configured for live posting."
+            await self._log(db, row.id, "skipped_unconfigured_platform", {"platform": row.platform})
+        if rows:
+            await db.commit()
+            logger.warning("unconfigured_live_posts_failed", count=len(rows), platforms=sorted(unavailable))
+        return len(rows)
 
     async def publish(
         self,
@@ -408,6 +441,144 @@ class SocialPostingService:
             "mock_sourced": mocked,
         }
 
+    async def ingest_telegram_update(self, db: AsyncSession, update: dict) -> dict:
+        """Ingest an update delivered by Telegram's webhook/getUpdates API."""
+        from app.services.posting.adapters import TelegramAdapter
+
+        parsed = TelegramAdapter.parse_update(update)
+        if parsed.get("kind") not in {"message", "comment", "reaction"}:
+            return {"status": "ignored", "reason": "unsupported_update"}
+
+        target_id = parsed.get("parent_message_id") or parsed.get("message_id")
+        if not target_id:
+            return {"status": "ignored", "reason": "missing_message_id"}
+
+        posts = (await db.execute(
+            select(SocialPost)
+            .where(SocialPost.platform == "telegram")
+            .where(SocialPost.status == "posted")
+            .where(SocialPost.platform_post_id == target_id)
+        )).scalars().all()
+        post = next(
+            (candidate for candidate in posts if self._telegram_chat_matches(candidate, parsed.get("chat_id"))),
+            None,
+        )
+        if post is None:
+            return {"status": "ignored", "reason": "telegram_post_not_found"}
+        if post.is_mock or post.source_type != "ACTUAL":
+            return {"status": "ignored", "reason": "simulated_post"}
+
+        if parsed["kind"] == "comment":
+            text = (parsed.get("text") or "").strip()
+            if not text:
+                return {"status": "ignored", "reason": "empty_comment"}
+            existing = (await db.execute(
+                select(SocialComment)
+                .where(SocialComment.social_post_id == post.id)
+                .where(SocialComment.platform_comment_id == parsed["message_id"])
+            )).scalar_one_or_none()
+            if existing is None:
+                comment = SocialComment(
+                    campaign_id=post.campaign_id,
+                    social_post_id=post.id,
+                    platform="telegram",
+                    platform_comment_id=parsed["message_id"],
+                    parent_platform_message_id=parsed["parent_message_id"],
+                    text=text,
+                    comment_date=parsed.get("event_date"),
+                    source_type="ACTUAL",
+                    source_system="telegram_bot_api",
+                    source_reference=parsed["message_id"],
+                    raw_payload=parsed.get("raw"),
+                )
+                db.add(comment)
+                await db.flush()
+                sentiment = await self._persist_telegram_sentiment(db, comment)
+            else:
+                sentiment = False
+            await db.commit()
+            return {"status": "ok", "comment_id": existing.id if existing else comment.id, "sentiment": sentiment}
+
+        if parsed["kind"] == "message" and any(
+            parsed.get(key) is not None for key in ("views", "reactions", "replies")
+        ):
+            event = (await db.execute(
+                select(AnalyticsEvent)
+                .where(AnalyticsEvent.social_post_id == post.id)
+                .where(AnalyticsEvent.platform == "telegram")
+                .order_by(AnalyticsEvent.event_date.desc())
+                .limit(1)
+            )).scalar_one_or_none()
+            if event is None:
+                event = AnalyticsEvent(
+                    campaign_id=post.campaign_id,
+                    social_post_id=post.id,
+                    platform="telegram",
+                    event_date=parsed.get("event_date") or datetime.utcnow(),
+                    source_type="ACTUAL",
+                    source_system="telegram_bot_api",
+                    source_reference=post.platform_post_id,
+                    is_mock=False,
+                )
+                db.add(event)
+            if parsed.get("views") is not None:
+                event.impressions = parsed["views"]
+            if parsed.get("reactions") is not None:
+                event.reactions = parsed["reactions"]
+            if parsed.get("replies") is not None:
+                event.comments = parsed["replies"]
+            event.event_date = parsed.get("event_date") or event.event_date
+            event.synced_at = datetime.utcnow()
+            await db.commit()
+            return {"status": "ok", "analytics": True, "source_type": "ACTUAL"}
+
+        return {"status": "unavailable", "reason": "telegram_update_has_no_aggregate_metrics"}
+
+    @staticmethod
+    def _telegram_chat_matches(post: SocialPost, chat_id: Optional[str]) -> bool:
+        if not chat_id:
+            return True
+        payload = post.response_payload or {}
+        result = payload.get("result", payload)
+        stored_chat_id = ((result.get("chat") or {}).get("id")) if isinstance(result, dict) else None
+        return stored_chat_id is None or str(stored_chat_id) == str(chat_id)
+
+    @staticmethod
+    async def _persist_telegram_sentiment(db: AsyncSession, comment: SocialComment) -> bool:
+        from app.services.ai.sentiment import sentiment_service
+
+        try:
+            analysis = await sentiment_service.analyze(
+                [comment.text],
+                comment.campaign_id,
+                source_type="ACTUAL",
+                source_system="telegram_comment",
+                source_reference=comment.platform_comment_id,
+            )
+        except (RuntimeError, ValueError):
+            return False
+        result = analysis["results"][0]
+        if result.get("source_type") != "PREDICTED" or result.get("is_fallback"):
+            return False
+        db.add(SentimentResult(
+            campaign_id=comment.campaign_id,
+            social_comment_id=comment.id,
+            text=comment.text,
+            label=result["label"],
+            positive_score=result["positive_score"],
+            negative_score=result["negative_score"],
+            neutral_score=result.get("neutral_score", 0.0),
+            confidence=result["confidence"],
+            model_used=result["model_used"],
+            source_type="PREDICTED",
+            input_source_type="ACTUAL",
+            source_system="telegram_comment",
+            source_reference=comment.platform_comment_id,
+            model_name=result.get("model_name", "DistilBERT SST-2"),
+            model_version=result.get("model_version"),
+        ))
+        return True
+
     async def platform_status(self) -> dict[str, dict]:
         """Per-platform integration state.
 
@@ -418,6 +589,9 @@ class SocialPostingService:
         results: dict[str, dict] = {}
         for p in SUPPORTED_PLATFORMS:
             configured = _credentials_present(p)
+            if settings.SOCIAL_MODE == "live" and not configured:
+                results[p] = {"configured": False, "healthy": False, "mode": "live"}
+                continue
             adapter = _get_adapter(p)
             try:
                 healthy = await adapter.health_check()

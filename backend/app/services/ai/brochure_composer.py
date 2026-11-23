@@ -68,6 +68,10 @@ class PosterCreativeSpec:
     aspect_ratio: str
     variation_index: int
 
+    # Brand Kit colour for the CTA pill / split panel; empty keeps the default.
+    # Separate field because `color_direction` is prose art direction, not a hex.
+    brand_color_hex: str = ""
+
 logger = logging.getLogger(__name__)
 
 # ── Zone weights ─────────────────────────────────────────────────────────────
@@ -584,18 +588,18 @@ class BrochureComposer:
     # ── Main compose ─────────────────────────────────────────────────────────
 
     def compose(self, *args, **kwargs) -> str:
-        """Route to legacy or dynamic composer based on spec type."""
-        spec = kwargs.get("spec") or (args[1] if len(args) > 1 else None)
-        if isinstance(spec, PosterCreativeSpec):
-            return self.compose_dynamic(
-                spec=kwargs.get("spec") or args[0],
-                base_image_path=kwargs.get("base_image_path") or args[1],
-                kit=kwargs.get("kit") or args[2],
-                output_path=kwargs.get("output_path") or args[3],
-                target_width=kwargs.get("target_width", 1080),
-                target_height=kwargs.get("target_height", 1080)
-            )
-        return self.compose_legacy(*args, **kwargs)
+        """Route to the legacy dict spec or the dynamic PosterCreativeSpec."""
+        # Keyword args win; positionally it is (spec, base, kit, out). The old
+        # `kwargs.get(k) or args[i]` raised IndexError for any falsy but valid
+        # value (`kit=None`, a 0 dimension), because `or` then evaluated a
+        # positional index a keyword call never supplied.
+        spec = kwargs.get("spec", args[0] if args else None)
+        if not isinstance(spec, PosterCreativeSpec):
+            return self.compose_legacy(*args, **kwargs)
+
+        return self.compose_dynamic(
+            **dict(zip(("base_image_path", "kit", "output_path"), args[1:4]), **kwargs)
+        )
 
     def compose_dynamic(
         self,
@@ -634,6 +638,10 @@ class BrochureComposer:
             overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
             draw = ImageDraw.Draw(overlay)
 
+            # Brand Kit colour for the CTA pill and split panel; unset keeps the
+            # composer's own defaults (red pill, dark panel).
+            brand_rgba = _hex_to_rgba(spec.brand_color_hex) if spec.brand_color_hex else None
+
             # Gradient overlays for text contrast
             if spec.composition_strategy in ["offer_focused", "hero_focused", "minimal"]:
                 grad_h = int(H * 0.45)
@@ -650,7 +658,7 @@ class BrochureComposer:
             
             elif spec.composition_strategy == "split_visual":
                 split_h = int(H * 0.35)
-                bg_color = _hex_to_rgba(spec.color_direction) if spec.color_direction and spec.color_direction.startswith('#') else (25, 28, 38, 240)
+                bg_color = brand_rgba[:3] + (240,) if brand_rgba else (25, 28, 38, 240)
                 draw.rectangle([0, H - split_h, W, H], fill=bg_color)
             
             # Brand / Logo
@@ -707,7 +715,7 @@ class BrochureComposer:
             # Draw CTA Pill
             cta_y = offer_y + offer_img.height + int(H * 0.03)
             cta_font = self._font_path(spec.cta, bold=True)
-            pill_color = _hex_to_rgba(spec.color_direction) if spec.color_direction and spec.color_direction.startswith('#') else (220, 40, 40, 255)
+            pill_color = brand_rgba or (220, 40, 40, 255)
             
             cta_text = spec.cta.upper()
             cta_text_size = int(H * 0.035)

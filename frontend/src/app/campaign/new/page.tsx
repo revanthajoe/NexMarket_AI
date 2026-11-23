@@ -89,6 +89,7 @@ export default function NewCampaignPage() {
     }
 
     setLoading(true);
+    let campaign: Awaited<ReturnType<typeof api.campaigns.create>> | null = null;
     try {
       const { post_now, ...payload } = form;
       const normalizedPayload = {
@@ -100,9 +101,15 @@ export default function NewCampaignPage() {
         target_audience: payload.target_audience.trim(),
         brand_style: payload.brand_style?.trim() || undefined,
       };
-      const campaign = await api.campaigns.create(normalizedPayload);
+      campaign = await api.campaigns.create(normalizedPayload);
       toast.success(`Campaign "${campaign.name}" created!`);
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to create campaign");
+      setLoading(false);
+      return;
+    }
 
+    if (campaign) {
       // Persist the language before the pipeline starts — the backend reads the
       // brand kit when generating, so setting it afterwards would be too late.
       try {
@@ -112,14 +119,16 @@ export default function NewCampaignPage() {
       }
 
       if (autoRun) {
-        await api.n8n.trigger(campaign.id, PIPELINE_STEPS);
-        toast.success("🚀 AI pipeline started — follow progress on the campaign page.");
+        try {
+          await api.n8n.trigger(campaign.id, PIPELINE_STEPS);
+          toast.success("🚀 AI pipeline started — follow progress on the campaign page.");
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : "Unknown pipeline error";
+          toast.error(`Campaign created, but the pipeline could not be started: ${message}`);
+        }
       }
 
       router.push(`/campaign/${campaign.id}`);
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to create campaign");
-    } finally {
       setLoading(false);
     }
   };
@@ -319,5 +328,3 @@ export default function NewCampaignPage() {
     </div>
   );
 }
-
-

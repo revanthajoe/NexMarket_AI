@@ -37,6 +37,25 @@ _BRAND_DIR.mkdir(parents=True, exist_ok=True)
 _IMAGE_EXTS = ["png", "jpg", "jpeg", "webp"]
 _FONT_EXTS  = ["ttf", "otf"]
 
+
+def validate_asset_bytes(asset_type: str, file_bytes: bytes, extension: str) -> None:
+    """Validate file signatures before an uploaded asset reaches disk."""
+    if not file_bytes:
+        raise ValueError("Uploaded asset is empty")
+    extension = extension.lower().lstrip(".")
+    if asset_type.startswith("font_"):
+        if extension == "ttf" and file_bytes[0:4] != b"\x00\x01\x00\x00":
+            raise ValueError("Invalid TrueType font signature")
+        if extension == "otf" and file_bytes[0:4] != b"OTTO":
+            raise ValueError("Invalid OpenType font signature")
+        return
+    if extension == "png" and file_bytes[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("Invalid PNG signature")
+    if extension in {"jpg", "jpeg"} and file_bytes[:3] != b"\xff\xd8\xff":
+        raise ValueError("Invalid JPEG signature")
+    if extension == "webp" and file_bytes[:12] != b"RIFF" + file_bytes[4:8] + b"WEBP":
+        raise ValueError("Invalid WebP signature")
+
 # Valid values for the upload endpoint's asset_type.
 ASSET_TYPES = (
     "logo", "partner_logo", "product", "product_cutout",

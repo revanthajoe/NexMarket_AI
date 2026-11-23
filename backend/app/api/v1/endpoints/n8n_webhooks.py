@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.models.models import AdCopy, Campaign, Poster, SocialPost
-from app.schemas.schemas import N8nTriggerCampaign, N8nWebhookResponse
+from app.schemas.schemas import AnalyticsIngestRequest, N8nTriggerCampaign, N8nWebhookResponse
 from app.services.ai.ad_generator import ad_copy_generator
 from app.services.ai.lead_prediction import lead_prediction_service
 from app.services.ai.lstm_forecast import lstm_forecast_service
@@ -21,8 +21,10 @@ from app.services.ai.poster_evaluator import poster_evaluator
 from app.services.ai.poster_generator import poster_generator
 from app.services.ai.sentiment import sentiment_service
 from app.services.optimization.optimizer import campaign_optimizer
-from app.services.posting.posting_service import social_posting_service
+from app.services.posting.posting_service import available_platforms, social_posting_service
 from app.services.model_metadata import active_model_version_id
+from app.services.sdxl_lora import active_sdxl_runtime
+from app.core.security import require_n8n_access
 
 router = APIRouter(prefix="/n8n", tags=["n8n Webhooks"])
 
@@ -32,15 +34,46 @@ async def n8n_trigger_campaign(
     payload: N8nTriggerCampaign,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_n8n_access),
 ):
     """
     Main entry point called by n8n to kick off the full campaign pipeline.
     Runs all steps async in a background task; each step is idempotent
     (skips if results already exist) to prevent duplicate DB rows.
     """
+    import logging
+    from app.core.config import settings
+    log = logging.getLogger(__name__)
+
     campaign = await db.get(Campaign, payload.campaign_id)
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
+
+    # If this is from the frontend/CLI (no execution_id) and n8n is configured,
+    # forward it to the real n8n webhook so n8n orchestrates the run.
+    if not payload.execution_id and settings.N8N_WEBHOOK_BASE:
+        import httpx
+        url = f"{settings.N8N_WEBHOOK_BASE.rstrip('/')}/nexmarket-campaign"
+        try:
+            async with httpx.AsyncClient() as client:
+                headers = (
+                    {"X-N8N-API-Key": settings.N8N_API_KEY}
+                    if settings.N8N_API_KEY else {}
+                )
+                r = await client.post(url, json={
+                    "campaign_id": payload.campaign_id,
+                    "platforms": payload.platforms,
+                    "force_poster": payload.force_poster,
+                }, headers=headers, timeout=5.0)
+                r.raise_for_status()
+            log.info("Handed off campaign %s to n8n webhook", payload.campaign_id)
+            return N8nWebhookResponse(
+                status="accepted",
+                message=f"Campaign pipeline handed off to n8n for {payload.campaign_id}",
+                data={"steps": payload.steps},
+            )
+        except Exception as e:
+            log.warning("Failed to reach n8n webhook (%s). Falling back to local orchestration. Error: %s", url, e)
 
     if campaign.status not in {"posted", "failed"} or any(
         step in payload.steps for step in ("poster", "evaluate", "adcopy", "optimize", "post")
@@ -56,6 +89,7 @@ async def n8n_trigger_campaign(
         steps: list,
         platforms: list | None,
         execution_id: str | None,
+        force_poster: bool,
     ):
         import logging
         from app.db.session import AsyncSessionLocal
@@ -89,11 +123,15 @@ async def n8n_trigger_campaign(
                     from app.core.config import settings
                     is_mock_upgrade = existing_posters and existing_posters[0].provider == "mock" and settings.IMAGE_PROVIDER != "mock"
 
-                    if existing_posters and not is_mock_upgrade:
+                    if existing_posters and not is_mock_upgrade and not force_poster:
                         log.info("pipeline_skip_poster campaign_id=%s already has posters", campaign_id)
                         results["poster_id"] = existing_posters[0].id
                     else:
                         try:
+                            if settings.IMAGE_PROVIDER == "local":
+                                sdxl_model_version_id, sdxl_lora_path = await active_sdxl_runtime(bg_db)
+                            else:
+                                sdxl_model_version_id, sdxl_lora_path = None, None
                             gen = await poster_generator.generate(
                                 campaign_name=c.name,
                                 product_name=c.product_name,
@@ -104,8 +142,28 @@ async def n8n_trigger_campaign(
                                 brand_style=c.brand_style,
                                 platform=c.preferred_platform or "instagram",
                                 campaign_id=c.id,
+                                variation=0,
+                                sdxl_model_version_id=sdxl_model_version_id,
+                                sdxl_lora_path=sdxl_lora_path,
                             )
-                            poster = Poster(campaign_id=c.id, **gen)
+                            latest_version = (await bg_db.execute(
+                                select(Poster.version)
+                                .where(Poster.campaign_id == c.id)
+                                .order_by(Poster.version.desc())
+                                .limit(1)
+                            )).scalar_one_or_none()
+                            poster = Poster(
+                                campaign_id=c.id,
+                                parent_poster_id=existing_posters[0].id if force_poster and existing_posters else None,
+                                version=(latest_version or 0) + 1,
+                                generation_reason="pipeline_regeneration" if force_poster and existing_posters else None,
+                                image_url=gen["image_url"],
+                                prompt_used=gen.get("prompt_used"),
+                                provider=gen.get("provider", "mock"),
+                                variation_index=gen.get("variation_index", 0),
+                                model_version_id=gen.get("model_version_id", sdxl_model_version_id),
+                                metadata_=gen.get("metadata_"),
+                            )
                             bg_db.add(poster)
                             # Commit, not flush: a flush opens the single SQLite
                             # write transaction and holds it through every
@@ -121,37 +179,46 @@ async def n8n_trigger_campaign(
                             log.error("pipeline_poster_failed: %s", exc, exc_info=True)
                             raise
 
-                    # ── Evaluate ─────────────────────────────────────────
-                    if "evaluate" in steps and results.get("poster_id"):
-                        try:
-                            poster_obj = await bg_db.get(Poster, results["poster_id"])
-                            if poster_obj:
-                                # Two stacked bugs lived here:
-                                #  1. evaluate() already returns the normalized,
-                                #     schema-ready dict. Calling normalize() on
-                                #     it again read sub-scores from a nested
-                                #     "dimensions" key it no longer has, zeroing
-                                #     every dimension.
-                                #  2. normalize() also returns "fallback", which
-                                #     is not a column, so PosterEvaluation(**norm)
-                                #     raised TypeError — swallowed by the except
-                                #     below, meaning this step never actually
-                                #     persisted an evaluation at all.
-                                # Build from the model's own columns instead.
-                                from app.models.models import PosterEvaluation
-                                norm = await poster_evaluator.evaluate(poster_obj.image_url)
-                                columns = {c.name for c in PosterEvaluation.__table__.columns}
-                                ev = PosterEvaluation(
-                                    poster_id=poster_obj.id,
-                                    **{k: v for k, v in norm.items() if k in columns},
-                                )
-                                if norm.get("source_type") == "PREDICTED":
-                                    ev.model_version_id = await active_model_version_id(bg_db, "qwen_vl")
-                                bg_db.add(ev)
-                                await bg_db.commit()
-                                log.info("pipeline_evaluate_done poster_id=%s", poster_obj.id)
-                        except Exception as exc:
-                            log.error("pipeline_evaluate_failed: %s", exc, exc_info=True)
+                # ── Evaluate ──────────────────────────────────────────────
+                # A sibling of the poster step, not a child of it: a run that
+                # requests `evaluate` without `poster` still has to score the
+                # campaign's existing poster. Nested, it never did.
+                if "evaluate" in steps:
+                    try:
+                        poster_id = results.get("poster_id") or (await bg_db.execute(
+                            select(Poster.id)
+                            .where(Poster.campaign_id == campaign_id)
+                            .order_by(Poster.created_at.desc())
+                            .limit(1)
+                        )).scalar_one_or_none()
+                        poster_obj = await bg_db.get(Poster, poster_id) if poster_id else None
+                        if poster_obj:
+                            # Two stacked bugs lived here:
+                            #  1. evaluate() already returns the normalized,
+                            #     schema-ready dict. Calling normalize() on
+                            #     it again read sub-scores from a nested
+                            #     "dimensions" key it no longer has, zeroing
+                            #     every dimension.
+                            #  2. normalize() also returns "fallback", which
+                            #     is not a column, so PosterEvaluation(**norm)
+                            #     raised TypeError — swallowed by the except
+                            #     below, meaning this step never actually
+                            #     persisted an evaluation at all.
+                            # Build from the model's own columns instead.
+                            from app.models.models import PosterEvaluation
+                            norm = await poster_evaluator.evaluate(poster_obj.image_url)
+                            columns = {c.name for c in PosterEvaluation.__table__.columns}
+                            ev = PosterEvaluation(
+                                poster_id=poster_obj.id,
+                                **{k: v for k, v in norm.items() if k in columns},
+                            )
+                            if norm.get("source_type") == "PREDICTED":
+                                ev.model_version_id = await active_model_version_id(bg_db, "qwen_vl")
+                            bg_db.add(ev)
+                            await bg_db.commit()
+                            log.info("pipeline_evaluate_done poster_id=%s", poster_obj.id)
+                    except Exception as exc:
+                        log.error("pipeline_evaluate_failed: %s", exc, exc_info=True)
 
                 # ── Ad Copy ───────────────────────────────────────────────
                 if "adcopy" in steps:
@@ -225,7 +292,7 @@ async def n8n_trigger_campaign(
                                 budget=c.budget,
                             )
                             results["optimization"] = opt
-                            
+
                             opt_record = OptimizationResult(
                                 campaign_id=campaign_id,
                                 recommended_platform=opt.get("recommended_platform", c.preferred_platform or "instagram"),
@@ -260,12 +327,25 @@ async def n8n_trigger_campaign(
                 # /posting/campaign/{id}/publish endpoint — this step must
                 # never raise for a publish failure.
                 if "post" in steps:
-                    target_platforms = platforms or (
-                        [results["optimization"]["recommended_platform"]]
-                        if results.get("optimization", {}).get("recommended_platform")
-                        else [c.preferred_platform]
-                    )
-                    
+                    configured_platforms = available_platforms()
+                    configured_platform_set = set(configured_platforms)
+                    if platforms is not None:
+                        requested_platforms = platforms
+                    elif c.preferred_platform == "all":
+                        requested_platforms = configured_platforms
+                    else:
+                        requested_platforms = [c.preferred_platform]
+                    target_platforms = list(dict.fromkeys(
+                        platform for platform in requested_platforms
+                        if platform in configured_platform_set
+                    ))
+                    unavailable_platforms = sorted(set(requested_platforms) - configured_platform_set)
+                    if unavailable_platforms:
+                        log.warning(
+                            "pipeline_skip_unconfigured_platforms campaign_id=%s platforms=%s",
+                            campaign_id, unavailable_platforms,
+                        )
+
                     # Idempotency: skip already posted platforms
                     existing_posts = (await bg_db.execute(
                         select(SocialPost)
@@ -276,7 +356,7 @@ async def n8n_trigger_campaign(
                     platforms_to_post = [p for p in target_platforms if p not in posted_platforms]
 
                     if not platforms_to_post:
-                        log.info("pipeline_skip_post campaign_id=%s already posted", campaign_id)
+                        log.info("pipeline_skip_post campaign_id=%s no new eligible platforms", campaign_id)
                         posts = []
                     else:
                         posts = await social_posting_service.create_posts_for_platforms(
@@ -402,8 +482,10 @@ async def n8n_trigger_campaign(
                                 log.info("pipeline_skip_lead_prediction campaign_id=%s no_actual_analytics", campaign_id)
                             else:
                                 platform = actual_events[0].platform
-                                total_clicks = int(sum(event.clicks for event in actual_events))
-                                total_views = int(sum(event.impressions for event in actual_events))
+                                # clicks/impressions are nullable (Telegram ingestion
+                                # never sets clicks); summing a None raises TypeError.
+                                total_clicks = int(sum(event.clicks or 0 for event in actual_events))
+                                total_views = int(sum(event.impressions or 0 for event in actual_events))
                                 if total_views <= 0:
                                     log.info("pipeline_skip_lead_prediction campaign_id=%s no_eligible_actual_features", campaign_id)
                                 else:
@@ -456,11 +538,12 @@ async def n8n_trigger_campaign(
                             log.error("pipeline_lead_prediction_failed: %s", exc, exc_info=True)
 
                 # ── Forecast ───────────────────────────────────────────────
-                # Runs the LSTM engagement forecast.  Uses any AnalyticsEvent
-                # rows already present (may be empty for a brand-new campaign;
-                # the LSTM service handles that gracefully with synthetic
-                # baselines).  Idempotent: skipped when a forecast already
-                # exists for this campaign.
+                # Runs the LSTM engagement forecast.  Requires at least 14
+                # ACTUAL AnalyticsEvent rows for this campaign; the LSTM
+                # service raises ValueError("INSUFFICIENT_DATA...") rather
+                # than falling back to a synthetic baseline, so a brand-new
+                # campaign simply has no forecast yet.  Idempotent: skipped
+                # when a forecast already exists for this campaign.
                 if "forecast" in steps:
                     from app.models.models import AnalyticsEvent, EngagementForecast
                     existing_forecast = (await bg_db.execute(
@@ -552,8 +635,15 @@ async def n8n_trigger_campaign(
                             opt.reward = None
                             opt.analytics_reference = None
                             continue
-                        reward = 1.0 if event.clicks > 0 else 0.0
-                        await campaign_optimizer.record_result(opt.recommended_platform, clicked=reward > 0)
+                        # clicks is nullable (Telegram ingestion never sets
+                        # it); comparing None to 0 raises TypeError.
+                        reward = 1.0 if (event.clicks or 0) > 0 else 0.0
+                        await campaign_optimizer.record_result(
+                            opt.recommended_platform,
+                            clicked=reward > 0,
+                            campaign_goal=c.campaign_goal,
+                            target_audience=c.target_audience
+                        )
                         opt.reward = reward
                         opt.reward_source = "ACTUAL"
                         opt.analytics_reference = f"analytics_event:{event.id}"
@@ -562,7 +652,13 @@ async def n8n_trigger_campaign(
 
                 # ── Finalise ──────────────────────────────────────────────
                 if "post" in steps:
-                    c.status = "posted"
+                    posted = (await bg_db.execute(
+                        select(SocialPost.id)
+                        .where(SocialPost.campaign_id == campaign_id)
+                        .where(SocialPost.status == "posted")
+                        .limit(1)
+                    )).first()
+                    c.status = "posted" if posted else "ready"
                 elif c.status not in {"posted", "failed"}:
                     c.status = "ready"
                 await bg_db.commit()
@@ -588,6 +684,7 @@ async def n8n_trigger_campaign(
         payload.steps,
         payload.platforms,
         payload.execution_id,
+        payload.force_poster,
     )
     return N8nWebhookResponse(
         status="accepted",
@@ -605,7 +702,11 @@ STALE_GENERATING_TIMEOUT_SECONDS = 20 * 60
 
 
 @router.get("/status/{campaign_id}", response_model=Dict[str, Any])
-async def n8n_campaign_status(campaign_id: str, db: AsyncSession = Depends(get_db)):
+async def n8n_campaign_status(
+    campaign_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_n8n_access),
+):
     """n8n polls this to check pipeline progress."""
     campaign = await db.get(Campaign, campaign_id)
     if not campaign:
@@ -635,20 +736,19 @@ async def n8n_campaign_status(campaign_id: str, db: AsyncSession = Depends(get_d
 
 @router.post("/analytics/ingest")
 async def n8n_ingest_analytics(
-    data: Dict[str, Any], db: AsyncSession = Depends(get_db)
+    data: AnalyticsIngestRequest,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_n8n_access),
 ):
     """n8n calls this to push analytics events from platform APIs."""
     from app.models.models import AnalyticsEvent
-    from datetime import datetime
 
-    campaign_id = data.get("campaign_id")
+    campaign_id = data.campaign_id
     campaign = await db.get(Campaign, campaign_id)
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
-    requested_source_type = data.get("source_type", "UNKNOWN")
-    if requested_source_type not in {"ACTUAL", "SIMULATED", "UNKNOWN"}:
-        raise HTTPException(status_code=422, detail="source_type must be ACTUAL, SIMULATED, or UNKNOWN")
+    requested_source_type = data.source_type
 
     from app.core.config import settings
     # Direct n8n ingestion is untrusted. Real ACTUAL provenance is assigned
@@ -661,20 +761,21 @@ async def n8n_ingest_analytics(
 
     event = AnalyticsEvent(
         campaign_id=campaign_id,
-        platform=data.get("platform", "unknown"),
-        event_date=datetime.fromisoformat(data.get("event_date", datetime.utcnow().isoformat())),
-        impressions=data.get("impressions", 0),
-        clicks=data.get("clicks", 0),
-        likes=data.get("likes", 0),
-        shares=data.get("shares", 0),
-        comments=data.get("comments", 0),
-        reach=data.get("reach", 0),
-        ctr=data.get("ctr", 0.0),
-        spend=data.get("spend", 0.0),
+        platform=data.platform,
+        event_date=data.event_date,
+        impressions=data.impressions,
+        clicks=data.clicks,
+        likes=data.likes,
+        shares=data.shares,
+        comments=data.comments,
+        reach=data.reach,
+        reactions=data.reactions,
+        ctr=data.ctr,
+        spend=data.spend,
         is_mock=source_type == "SIMULATED",
         source_type=source_type,
-        source_system=data.get("source_system", "n8n"),
-        source_reference=data.get("source_reference"),
+        source_system=data.source_system or "n8n",
+        source_reference=data.source_reference,
         synced_at=datetime.utcnow(),
     )
     db.add(event)
@@ -683,7 +784,9 @@ async def n8n_ingest_analytics(
 
 @router.post("/report/trigger")
 async def n8n_trigger_report(
-    data: Dict[str, Any], db: AsyncSession = Depends(get_db)
+    data: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_n8n_access),
 ):
     """n8n triggers a report generation."""
     campaign_id = data.get("campaign_id")

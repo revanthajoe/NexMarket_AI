@@ -3,10 +3,13 @@
  * Thin wrapper around fetch/axios for all backend calls.
  */
 
-let activeBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
-const FALLBACK_PORTS = [8000, 8001, 8002, 8003, 8004, 8005];
+const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL;
+let activeBase = (configuredApiUrl || "http://127.0.0.1:8000/api/v1")
+  .replace(/^http:\/\/localhost(?=:)/, "http://127.0.0.1");
+const FALLBACK_PORTS = [8000, 8001, 8003, 8004, 8005];
 
 const REQUEST_TIMEOUT_MS = 30_000;
+const MODEL_REQUEST_TIMEOUT_MS = 180_000;
 // AI-heavy endpoints (SDXL poster generation, vision evaluation) need much longer
 const AI_REQUEST_TIMEOUT_MS = 7_200_000; // 2 hours
 
@@ -25,6 +28,14 @@ const getCache = new Map<string, { at: number; promise: Promise<unknown> }>();
  *  (e.g. after a background pipeline finishes). */
 export function invalidateCache() {
   getCache.clear();
+}
+
+export function getApiOrigin(): string {
+  try {
+    return new URL(activeBase).origin;
+  } catch {
+    return "http://127.0.0.1:8000";
+  }
 }
 
 async function req<T>(
@@ -57,8 +68,21 @@ async function rawReq<T>(
 ): Promise<T> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await rawReqWithController<T>(path, options, controller);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function rawReqWithController<T>(
+  path: string,
+  options: RequestInit,
+  controller: AbortController,
+): Promise<T> {
   let res: Response | null = null;
   let fetchError: unknown = null;
+  const appApiKey = process.env.NEXT_PUBLIC_APP_API_KEY;
 
   // Fault tolerance: Automatically scan common ports if local backend shifts
   if (activeBase.match(/(localhost|127\.0\.0\.1):\d+/)) {
@@ -74,6 +98,9 @@ async function rawReq<T>(
       
       // We must completely omit Content-Type for FormData so the browser sets the boundary
       const customHeaders: Record<string, string> = { ...(options.headers as Record<string, string>) };
+      if (appApiKey) {
+        customHeaders["X-App-API-Key"] = appApiKey;
+      }
       if (!isFormData) {
         customHeaders["Content-Type"] = "application/json";
       } else {
@@ -102,6 +129,9 @@ async function rawReq<T>(
       const isFormData = options.body && typeof (options.body as any).append === "function";
       
       const customHeaders: Record<string, string> = { ...(options.headers as Record<string, string>) };
+      if (appApiKey) {
+        customHeaders["X-App-API-Key"] = appApiKey;
+      }
       if (!isFormData) {
         customHeaders["Content-Type"] = "application/json";
       } else {
@@ -119,8 +149,6 @@ async function rawReq<T>(
       fetchError = err;
     }
   }
-
-  clearTimeout(timeoutId);
 
   if (fetchError || !res) {
     const isTimeout = fetchError instanceof DOMException && fetchError.name === "AbortError";
@@ -152,6 +180,9 @@ async function rawReq<T>(
     const err = await res.text();
     throw new Error(err || `HTTP ${res.status}`);
   }
+  // 204 No Content (campaign delete) carries no body — res.json() would throw
+  // "Unexpected end of JSON input" on an otherwise successful request.
+  if (res.status === 204) return undefined as unknown as T;
   return res.json();
 }
 
@@ -261,16 +292,16 @@ export const api = {
   },
 
   sentiment: {
-    analyze: (texts: string[], campaign_id?: string) =>
+    analyze: (texts: string[], campaign_id?: string, source_system = "intelligence_hub") =>
       req<SentimentBatchResponse>("/sentiment/analyze", {
         method: "POST",
-        body: JSON.stringify({ texts, campaign_id }),
-      }),
+        body: JSON.stringify({ texts, campaign_id, source_type: "ACTUAL", source_system }),
+      }, MODEL_REQUEST_TIMEOUT_MS),
   },
 
   leads: {
     predict: (data: LeadScoreRequest) =>
-      req<LeadScore>("/leads/predict", { method: "POST", body: JSON.stringify(data) }),
+      req<LeadScore>("/leads/predict", { method: "POST", body: JSON.stringify(data) }, MODEL_REQUEST_TIMEOUT_MS),
     getByCampaign: (campaign_id: string) =>
       req(`/leads/campaign/${campaign_id}`),
   },
@@ -297,6 +328,8 @@ export const api = {
     dashboard: () => req<DashboardSummary>("/analytics/dashboard"),
     getCampaign: (campaign_id: string) =>
       req<AnalyticsEvent[]>(`/analytics/campaign/${campaign_id}`),
+    comments: (campaign_id: string) =>
+      req<SocialComment[]>(`/analytics/campaign/${campaign_id}/comments`),
     timeseries: (days = 14, campaign_id?: string) =>
       req<EngagementPoint[]>(
         `/analytics/engagement/timeseries?days=${days}` +
@@ -315,10 +348,10 @@ export const api = {
   },
 
   n8n: {
-    trigger: (campaign_id: string, steps: string[] = PIPELINE_STEPS) =>
+    trigger: (campaign_id: string, steps: string[] = PIPELINE_STEPS, forcePoster = false) =>
       req<N8nResponse>("/n8n/trigger/campaign", {
         method: "POST",
-        body: JSON.stringify({ campaign_id, steps }),
+        body: JSON.stringify({ campaign_id, steps, force_poster: forcePoster }),
       }),
     // Polled on an interval — must bypass the GET cache to see live progress.
     status: (campaign_id: string) =>
@@ -491,6 +524,9 @@ export interface SentimentResult {
   neutral_score: number;
   confidence: number;
   model_used: string;
+  source_type?: string;
+  input_source_type?: string;
+  model_name?: string;
 }
 
 export interface LeadScoreRequest {
@@ -558,19 +594,43 @@ export interface DashboardSummary {
   avg_engagement_rate: number;
   total_leads: number;
   hot_leads: number;
+  /** Analysed-comment sentiment split, counted from stored labels. */
+  sentiment_positive: number;
+  sentiment_neutral: number;
+  sentiment_negative: number;
+  sentiment_total: number;
 }
 
 export interface AnalyticsEvent {
   date: string;
   platform: string;
-  impressions: number;
-  clicks: number;
-  likes: number;
-  shares: number;
-  comments: number;
-  reach: number;
-  ctr: number;
-  spend: number;
+  social_post_id?: string | null;
+  impressions: number | null;
+  clicks: number | null;
+  likes: number | null;
+  shares: number | null;
+  comments: number | null;
+  reactions: number | null;
+  reach: number | null;
+  ctr: number | null;
+  spend: number | null;
+  is_mock: boolean;
+  source_type: string;
+}
+
+export interface SocialComment {
+  id: string;
+  campaign_id: string;
+  social_post_id: string;
+  text: string;
+  timestamp: string | null;
+  source_type: string;
+  source_system?: string | null;
+  sentiment: {
+    label: string;
+    source_type: string;
+    model_name?: string | null;
+  } | null;
 }
 
 export interface N8nResponse {
@@ -608,6 +668,7 @@ export interface PlatformBreakdown {
 export interface TrackingStatus {
   campaign_id: string | null;
   event_count: number;
+  actual_event_count: number;
   published_posts: number;
   mock_event_count: number;
   has_real_data: boolean;

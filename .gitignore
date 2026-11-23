@@ -14,6 +14,10 @@
 .env.*.local
 .env.production
 .env.development
+!.env.example
+!.env.template
+backend/.env
+frontend/.env.local
 
 # ─── OS-specific ─────────────────────────────────────────────────────────────
 Thumbs.db
@@ -30,11 +34,23 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
+*.dump
+*.dump.*
+backups/
+temp/
 
 # ─── Root-level build artifacts ──────────────────────────────────────────────
 dist/
 build/
+node_modules/
+.next/
+.turbo/
+.cache/
+.parcel-cache/
 *.egg-info/
+.venv/
+venv/
+env/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -43,24 +59,22 @@ __pycache__/
 .ipynb_checkpoints/
 coverage/
 
-# ─── SDXL (local-only backend) ──────────────────────────────────────────────
-# The SDXL path is kept on disk and works with IMAGE_PROVIDER=local, but is not
-# tracked in git.
-# Consequence: a fresh clone has no sdxl_service.py — the four SDXL chunking
-# tests skip themselves (see tests/test_main.py), and IMAGE_PROVIDER=local
-# will not run there until the file is restored.
-backend/ai/diffusion/
-backend/app/services/ai/sdxl_prompt_template.md
-
 # ─── Local datasets, model weights & generated assets ───────────────────────
 data/poster_train/
+data/
 backend/assets/brand_kits/*
+backend/assets/posters/*
+assets/posters/
 backend/ml/lora/
+backend/ml/lstm/*.pt
+backend/ml/lstm/*.npz
+backend/ml/xgboost_model/*.json
 *.safetensors
 *.onnx
 *.ckpt
 *.pt
 *.pth
+*.npz
 
 # ─── Notebook and build metadata ────────────────────────────────────────────
 *.tsbuildinfo
@@ -69,4 +83,6 @@ backend/ml/lora/
 compare_before.png
 compare_after.png
 
-/data
+# ─── Generated archives and reports ─────────────────────────────────────────
+*_source_package.zip
+*_zip_report.txt

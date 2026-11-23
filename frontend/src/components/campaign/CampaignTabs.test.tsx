@@ -39,7 +39,7 @@ function makeAdCopy(overrides: Partial<AdCopy> = {}): AdCopy {
 describe("PostingTab", () => {
   it("renders a checkbox for every supported platform, instagram checked by default", () => {
     render(
-      <PostingTab posts={[]} campaignId="c1" copies={[]} posters={[]} onPost={vi.fn()} loading={false} />
+      <PostingTab posts={[]} campaignId="c1" copies={[]} posters={[]} selectedPosterId={null} onPost={vi.fn()} loading={false} />
     );
     for (const label of ["Instagram", "Facebook", "Telegram", "Whatsapp"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
@@ -52,7 +52,7 @@ describe("PostingTab", () => {
   it("calls onPost with every selected platform when Post Now is clicked", () => {
     const onPost = vi.fn();
     render(
-      <PostingTab posts={[]} campaignId="c1" copies={[]} posters={[]} onPost={onPost} loading={false} />
+      <PostingTab posts={[]} campaignId="c1" copies={[]} posters={[]} selectedPosterId="poster-v2" onPost={onPost} loading={false} />
     );
     fireEvent.click(screen.getByText("Telegram"));
     fireEvent.click(screen.getByText(/Post Now/));
@@ -64,7 +64,7 @@ describe("PostingTab", () => {
 
   it("disables Post Now once every platform is deselected", () => {
     render(
-      <PostingTab posts={[]} campaignId="c1" copies={[]} posters={[]} onPost={vi.fn()} loading={false} />
+      <PostingTab posts={[]} campaignId="c1" copies={[]} posters={[]} selectedPosterId={null} onPost={vi.fn()} loading={false} />
     );
     fireEvent.click(screen.getByText("Instagram")); // deselect the only checked platform
     expect(screen.getByText(/Post Now/).closest("button")).toBeDisabled();
@@ -76,7 +76,7 @@ describe("PostingTab", () => {
       makePost({ id: "p2", platform: "telegram", status: "failed" }),
     ];
     render(
-      <PostingTab posts={posts} campaignId="c1" copies={[]} posters={[]} onPost={vi.fn()} loading={false} />
+      <PostingTab posts={posts} campaignId="c1" copies={[]} posters={[]} selectedPosterId={null} onPost={vi.fn()} loading={false} />
     );
     expect(screen.getByText("instagram")).toBeInTheDocument();
     expect(screen.getByText("telegram")).toBeInTheDocument();
@@ -87,9 +87,31 @@ describe("PostingTab", () => {
   it("shows a mock badge for posts made in mock mode", () => {
     const posts = [makePost({ is_mock: true })];
     render(
-      <PostingTab posts={posts} campaignId="c1" copies={[]} posters={[]} onPost={vi.fn()} loading={false} />
+      <PostingTab posts={posts} campaignId="c1" copies={[]} posters={[]} selectedPosterId={null} onPost={vi.fn()} loading={false} />
     );
     expect(screen.getByText(/mock/i)).toBeInTheDocument();
+  });
+
+  it("publishes the selected poster version", () => {
+    const onPost = vi.fn();
+    render(
+      <PostingTab posts={[]} campaignId="c1" copies={[]} posters={[]}
+        selectedPosterId="poster-v2" onPost={onPost} loading={false} />
+    );
+    fireEvent.click(screen.getByText(/Post Now/));
+    expect(onPost).toHaveBeenCalledWith(["instagram"], undefined, "poster-v2");
+  });
+
+  it("allows text-only posting without a poster", () => {
+    const onPost = vi.fn();
+    render(
+      <PostingTab posts={[]} campaignId="c1" copies={[]} posters={[]}
+        selectedPosterId={null} onPost={onPost} loading={false} />
+    );
+    const button = screen.getByText(/Post Now/).closest("button");
+    expect(button).not.toBeDisabled();
+    fireEvent.click(button!);
+    expect(onPost).toHaveBeenCalledWith(["instagram"], undefined, undefined);
   });
 });
 

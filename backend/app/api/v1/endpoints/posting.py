@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
@@ -17,6 +17,11 @@ from app.services.posting.posting_service import (
     resolve_post_text,
     social_posting_service,
 )
+from app.core.security import (
+    require_app_api_key,
+    require_n8n_access,
+    require_telegram_webhook_secret,
+)
 
 router = APIRouter(prefix="/posting", tags=["Social Posting"])
 
@@ -26,6 +31,7 @@ async def publish_post(
     payload: PostRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
 ):
     campaign = await db.get(Campaign, payload.campaign_id)
     if not campaign:
@@ -86,6 +92,7 @@ async def publish_campaign_to_platforms(
     payload: CampaignPublishRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
 ):
     """
     Publish one campaign to several platforms in a single call.
@@ -176,6 +183,7 @@ async def retry_post(
     post_id: str,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_app_api_key),
 ):
     post = await db.get(SocialPost, post_id)
     if not post:
@@ -183,18 +191,31 @@ async def retry_post(
     if post.status not in ("failed", "pending"):
         raise HTTPException(status_code=400, detail=f"Cannot retry post in status '{post.status}'")
 
+    # Re-resolve the real content. This used to build "[Retry] " plus
+    # response_payload["text"] — nothing ever wrote that key, so every retry
+    # re-posted the literal placeholder string instead of the campaign copy,
+    # and it passed no image_url so the poster was silently dropped.
+    text = await resolve_post_text(db, post.campaign_id, post.ad_copy_id)
+    image_url = await resolve_post_image(db, post.poster_id)
+
+    # Set the status and COMMIT before scheduling the task, exactly as
+    # publish_post() does above. Assigning it after add_task() leaves the
+    # attribute dirty on this request's session, so get_db()'s post-yield
+    # commit flushes "posting" over the background task's "posted" — the row
+    # ends up published but permanently reported as in-flight.
     post.retry_count = 0
-    text = "[Retry] " + (post.response_payload or {}).get("text", "NexMarket AI campaign post")
+    post.status = "posting"
+    await db.commit()
+    await db.refresh(post)
 
     async def do_retry():
         from app.db.session import AsyncSessionLocal
         async with AsyncSessionLocal() as bg_db:
             sp = await bg_db.get(SocialPost, post_id)
-            await social_posting_service.publish(bg_db, sp, text)
+            await social_posting_service.publish(bg_db, sp, text, image_url)
             await bg_db.commit()
 
     background_tasks.add_task(do_retry)
-    post.status = "posting"
     return post
 
 
@@ -211,7 +232,11 @@ async def integrations_status():
 
 
 @router.post("/metrics/sync/{campaign_id}")
-async def sync_campaign_metrics(campaign_id: str, db: AsyncSession = Depends(get_db)):
+async def sync_campaign_metrics(
+    campaign_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_n8n_access),
+):
     """Pull engagement back from each platform into AnalyticsEvent rows."""
     campaign = await db.get(Campaign, campaign_id)
     if not campaign:
@@ -219,8 +244,21 @@ async def sync_campaign_metrics(campaign_id: str, db: AsyncSession = Depends(get
     return await social_posting_service.sync_campaign_metrics(db, campaign_id)
 
 
+@router.post("/telegram/webhook")
+async def telegram_webhook(
+    data: Dict[str, Any],
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_telegram_webhook_secret),
+):
+    """Receive Telegram Bot API updates for post metrics and replies."""
+    return await social_posting_service.ingest_telegram_update(db, data)
+
+
 @router.post("/scheduled/run")
-async def run_scheduled_posts(db: AsyncSession = Depends(get_db)):
+async def run_scheduled_posts(
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_n8n_access),
+):
     """Publish every scheduled post that is now due (called by n8n or the worker)."""
     count = await social_posting_service.publish_scheduled_due(db)
     return {"status": "ok", "published": count}

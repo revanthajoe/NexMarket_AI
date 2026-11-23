@@ -1,5 +1,8 @@
-const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL?.replace("/api/v1", "")
-  ?? "http://localhost:8000";
+import { getApiOrigin } from "@/lib/api";
+
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_URL?.replace("/api/v1", "")
+  ?? "http://127.0.0.1:8000")
+  .replace(/^http:\/\/localhost(?=:)/, "http://127.0.0.1");
 
 /**
  * Normalize a poster image_url from the API into a browser-loadable URL.
@@ -10,11 +13,15 @@ const API_ORIGIN = process.env.NEXT_PUBLIC_API_URL?.replace("/api/v1", "")
 export function getPosterImageUrl(imageUrl: string): string {
   if (!imageUrl) return "";
   if (imageUrl.startsWith("http://") || imageUrl.startsWith("https://")) {
-    return imageUrl; // Already absolute — use directly
+    const parsed = new URL(imageUrl);
+    if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
+      return `${getApiOrigin() || API_ORIGIN}${parsed.pathname}${parsed.search}`;
+    }
+    return imageUrl;
   }
   // Relative path: prefix with origin
   const path = imageUrl.startsWith("/") ? imageUrl : `/${imageUrl}`;
-  return `${API_ORIGIN}${path}`;
+  return `${getApiOrigin() || API_ORIGIN}${path}`;
 }
 
 /** True when the provider is mock — a transparent pixel, not a real image. */

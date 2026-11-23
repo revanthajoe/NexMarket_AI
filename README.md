@@ -186,7 +186,7 @@ npm run dev
 docker run -d -p 5678:5678 \
   -e N8N_BASIC_AUTH_ACTIVE=true \
   -e N8N_BASIC_AUTH_USER=admin \
-  -e N8N_BASIC_AUTH_PASSWORD=nexmarket123 \
+  -e N8N_BASIC_AUTH_PASSWORD="${N8N_BASIC_AUTH_PASSWORD:?Set a strong password first}" \
   docker.n8n.io/n8nio/n8n
 
 # Open http://localhost:5678

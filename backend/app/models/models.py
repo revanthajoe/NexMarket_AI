@@ -201,6 +201,7 @@ class Campaign(Base):
     ad_copies: Mapped[list["AdCopy"]] = relationship(back_populates="campaign", passive_deletes=True)
     social_posts: Mapped[list["SocialPost"]] = relationship(back_populates="campaign", passive_deletes=True)
     analytics: Mapped[list["AnalyticsEvent"]] = relationship(back_populates="campaign", passive_deletes=True)
+    social_comments: Mapped[list["SocialComment"]] = relationship(back_populates="campaign", passive_deletes=True)
     lead_scores: Mapped[list["LeadScore"]] = relationship(back_populates="campaign", passive_deletes=True)
     forecasts: Mapped[list["EngagementForecast"]] = relationship(
         back_populates="campaign", passive_deletes=True
@@ -389,6 +390,7 @@ class SocialPost(Base):
     # passive_deletes=True: post_logs.post_id is ondelete="CASCADE" and
     # non-nullable — same reasoning as the Campaign relationships above.
     logs: Mapped[list["PostLog"]] = relationship(back_populates="post", passive_deletes=True)
+    comments: Mapped[list["SocialComment"]] = relationship(back_populates="social_post", passive_deletes=True)
 
 
 class PostLog(Base):
@@ -407,6 +409,32 @@ class PostLog(Base):
     post: Mapped["SocialPost"] = relationship(back_populates="logs")
 
 
+class SocialComment(Base):
+    """A platform comment or reply linked to its campaign social post."""
+
+    __tablename__ = "social_comments"
+    __table_args__ = (
+        UniqueConstraint("social_post_id", "platform_comment_id", name="uq_social_comment_platform_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    campaign_id: Mapped[str] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"))
+    social_post_id: Mapped[str] = mapped_column(ForeignKey("social_posts.id", ondelete="CASCADE"))
+    platform: Mapped[str] = mapped_column(String(100), nullable=False)
+    platform_comment_id: Mapped[str] = mapped_column(String(500), nullable=False)
+    parent_platform_message_id: Mapped[Optional[str]] = mapped_column(String(500))
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    comment_date: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False, default="UNKNOWN")
+    source_system: Mapped[Optional[str]] = mapped_column(String(100))
+    source_reference: Mapped[Optional[str]] = mapped_column(String(500))
+    raw_payload: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    campaign: Mapped["Campaign"] = relationship(back_populates="social_comments")
+    social_post: Mapped["SocialPost"] = relationship(back_populates="comments")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Analytics Event
 # ─────────────────────────────────────────────────────────────────────────────
@@ -417,16 +445,20 @@ class AnalyticsEvent(Base):
     campaign_id: Mapped[str] = mapped_column(
         ForeignKey("campaigns.id", ondelete="CASCADE")
     )
+    social_post_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("social_posts.id", ondelete="SET NULL")
+    )
     platform: Mapped[str] = mapped_column(String(100))
     event_date: Mapped[datetime] = mapped_column(DateTime)
-    impressions: Mapped[int] = mapped_column(BigInteger, default=0)
-    clicks: Mapped[int] = mapped_column(BigInteger, default=0)
-    likes: Mapped[int] = mapped_column(BigInteger, default=0)
-    shares: Mapped[int] = mapped_column(BigInteger, default=0)
-    comments: Mapped[int] = mapped_column(BigInteger, default=0)
-    reach: Mapped[int] = mapped_column(BigInteger, default=0)
-    ctr: Mapped[float] = mapped_column(Float, default=0.0)
-    spend: Mapped[float] = mapped_column(Float, default=0.0)
+    impressions: Mapped[Optional[int]] = mapped_column(BigInteger, default=None)
+    clicks: Mapped[Optional[int]] = mapped_column(BigInteger, default=None)
+    likes: Mapped[Optional[int]] = mapped_column(BigInteger, default=None)
+    shares: Mapped[Optional[int]] = mapped_column(BigInteger, default=None)
+    comments: Mapped[Optional[int]] = mapped_column(BigInteger, default=None)
+    reach: Mapped[Optional[int]] = mapped_column(BigInteger, default=None)
+    ctr: Mapped[Optional[float]] = mapped_column(Float, default=None)
+    spend: Mapped[Optional[float]] = mapped_column(Float, default=None)
+    reactions: Mapped[Optional[int]] = mapped_column(BigInteger, default=None)
     # True when the numbers came from the mock adapter rather than a platform
     # API — the UI labels these so demo data is never read as measured results.
     is_mock: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -449,6 +481,9 @@ class SentimentResult(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     campaign_id: Mapped[Optional[str]] = mapped_column(
         ForeignKey("campaigns.id", ondelete="SET NULL")
+    )
+    social_comment_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("social_comments.id", ondelete="SET NULL")
     )
     text: Mapped[str] = mapped_column(Text, nullable=False)
     label: Mapped[str] = mapped_column(String(20))  # positive | negative | neutral
@@ -554,3 +589,23 @@ class OptimizationResult(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     campaign: Mapped["Campaign"] = relationship(back_populates="optimizations")
+
+
+class BanditState(Base):
+    """
+    Persisted state for Thompson Sampling multi-armed bandit.
+    Tracks Beta distribution parameters (alpha, beta) for each arm.
+    """
+    __tablename__ = "bandit_states"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    context_hash: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    arm_id: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    alpha: Mapped[float] = mapped_column(Float, nullable=False, default=2.0)
+    beta: Mapped[float] = mapped_column(Float, nullable=False, default=2.0)
+    version: Mapped[str] = mapped_column(String(50), nullable=False, default="1.0")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("context_hash", "arm_id", name="uix_bandit_context_arm"),
+    )
